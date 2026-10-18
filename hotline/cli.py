@@ -28,13 +28,15 @@ from pathlib import Path
 from hotline import __version__
 from hotline.config import Config, load_config
 from hotline.detect import Detection, detect
-from hotline.notify import notify
+from hotline.notify import notify, notify_rich
+from hotline.pipeline import handle_audio_trigger
 from hotline.sources import Item
 from hotline.sources.audio import iter_windows, transcribe_stream
 from hotline.sources.sitemap import poll_sitemap
 from hotline.sources.social import poll_social
 from hotline.sources.web import parse_html, poll_web
 from hotline.store import Store, item_hash
+from hotline.summarize import summarize
 
 #: All selectable source names, in default polling order.
 ALL_SOURCES = ("web", "sitemap", "social", "audio")
@@ -102,6 +104,15 @@ def _add_common_flags(parser: argparse.ArgumentParser) -> None:
         help="Restrict to a source (repeatable). Default: all sources.",
     )
     parser.add_argument("--config", help="Path to a TOML config file.")
+    parser.add_argument(
+        "--audio",
+        action="store_true",
+        help=(
+            "Force-enable the event-driven audio path even when the config "
+            "leaves audio disabled. Under --dry-run it demonstrates a rich "
+            "alert from the bundled fixtures and never touches ffmpeg/network."
+        ),
+    )
     parser.add_argument(
         "--db",
         default=_DB_UNSET,
@@ -185,7 +196,9 @@ def _run_poll(args: argparse.Namespace, config: Config, store: Store) -> int:
     """Run one polling pass over the selected sources.
 
     Detects giveaway callouts, dedupes via the store, and notifies (or prints
-    in dry-run). Returns the count of fresh detections notified.
+    in dry-run). When the audio path is active it fires after the web/sitemap
+    pass (event-driven on a fresh detection, or always in continuous mode).
+    Returns the count of fresh detections notified.
     """
     sources = _selected_sources(args)
 
@@ -204,7 +217,60 @@ def _run_poll(args: argparse.Namespace, config: Config, store: Store) -> int:
         store.mark_notified(hash_)
         notified += 1
 
+    notified += _run_audio(args, config, store, web_fired=notified > 0)
+
     return notified
+
+
+def _audio_active(args: argparse.Namespace, config: Config) -> bool:
+    """Return whether the event-driven audio path should run this pass."""
+    return bool(getattr(args, "audio", False) or config.audio_enabled)
+
+
+def _run_audio(args: argparse.Namespace, config: Config, store: Store, *, web_fired: bool) -> int:
+    """Run the event-driven audio path for one poll pass.
+
+    Fires when audio is active (``--audio`` or ``config.audio_enabled``) and
+    either a web/sitemap detection fired this pass or ``audio_mode`` is
+    ``"continuous"``. In ``--dry-run`` the transcript and clip come from the
+    bundled fixtures so no ffmpeg or network is touched. Returns 1 if a fresh
+    audio detection was alerted, else 0.
+    """
+    if not _audio_active(args, config):
+        return 0
+    if not (web_fired or config.audio_mode == "continuous"):
+        return 0
+
+    if args.dry_run:
+        transcript = (_FIXTURES_DIR / "callout_transcript.txt").read_text(encoding="utf-8")
+        clip_path = _FIXTURES_DIR / "audio_clip.ogg"
+    else:
+        transcript, clip = handle_audio_trigger(config)
+        if not transcript or clip is None:
+            return 0
+        clip_path = clip
+
+    detection = detect(transcript, "audio")
+    if detection is None:
+        return 0
+
+    stream_url = config.audio_stream_url or "audio-stream"
+    item = Item(
+        title="987FM on-air callout",
+        url=f"{stream_url}#audio",
+        text=transcript,
+        published=None,
+        source="audio",
+    )
+    hash_ = item_hash(item)
+    if not store.should_notify(hash_):
+        return 0
+
+    summary = summarize(transcript, detection, config)
+    dry_run = args.dry_run or not (config.telegram_token and config.chat_id)
+    notify_rich(summary, detection, transcript, clip_path, config, dry_run=dry_run)
+    store.mark_notified(hash_)
+    return 1
 
 
 def _emit(detection: Detection, item: Item, config: Config, *, dry_run: bool) -> None:

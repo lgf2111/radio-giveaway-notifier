@@ -39,6 +39,39 @@ def test_once_dry_run_notifies_multiple(capsys, monkeypatch, tmp_path):
     assert out.count("Giveaway alert") >= 3
 
 
+def test_once_dry_run_audio_emits_rich_alert(capsys, monkeypatch, tmp_path):
+    """``once --dry-run --audio`` emits a rich fixture-backed audio alert.
+
+    No ffmpeg or network is touched: the transcript and clip come from the
+    bundled fixtures. The 3 web/audio-window detections still fire too.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    rc = cli.main(["once", "--dry-run", "--audio"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    # The usual fixture detections are still reported.
+    assert out.count("Giveaway alert") >= 3
+    # Plus a rich audio alert built from callout_transcript.txt + audio_clip.ogg.
+    assert "987FM giveaway" in out  # summary headline
+    assert "Action:" in out
+    assert "would attach" in out
+    assert "audio_clip.ogg" in out
+
+
+def test_once_dry_run_without_audio_has_no_rich_alert(capsys, monkeypatch, tmp_path):
+    """Plain ``once --dry-run`` prints >=3 detections and no rich audio alert."""
+    monkeypatch.chdir(tmp_path)
+
+    rc = cli.main(["once", "--dry-run"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out.count("Giveaway alert") >= 3
+    assert "would attach" not in out
+
+
 def test_source_web_restricts_sources(capsys, monkeypatch, tmp_path):
     """``--source web`` excludes the audio fixture detections."""
     monkeypatch.chdir(tmp_path)

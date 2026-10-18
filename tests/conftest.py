@@ -145,6 +145,33 @@ def make_sender():
 
 
 @pytest.fixture
+def make_multipart_sender():
+    """Return a factory building a fake Telegram multipart (sendVoice) sender.
+
+    The returned ``sender(url, fields, filename, file_bytes) -> dict`` records
+    each call on ``sender.calls`` (as a dict of endpoint/fields/filename/bytes)
+    and returns a canned ``{"ok": True}`` response. No network I/O.
+    """
+
+    def _factory() -> Callable[[str, dict[str, str], str, bytes], dict]:
+        def _send(url: str, fields: dict[str, str], filename: str, file_bytes: bytes) -> dict:
+            _send.calls.append(  # type: ignore[attr-defined]
+                {
+                    "url": url,
+                    "fields": fields,
+                    "filename": filename,
+                    "file_bytes": file_bytes,
+                }
+            )
+            return {"ok": True}
+
+        _send.calls = []  # type: ignore[attr-defined]
+        return _send
+
+    return _factory
+
+
+@pytest.fixture
 def make_transcriber():
     """Return a factory building a fake audio transcriber.
 
