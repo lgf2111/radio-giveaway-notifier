@@ -31,8 +31,27 @@ _SITEMAP_NS = "http://www.sitemaps.org/schemas/sitemap/0.9"
 #: Path prefix of 987FM pages we care about.
 _RADIO_987_PREFIX = "/radio/987/"
 
-#: Case-insensitive slug keywords that mark a page as a giveaway/contest.
-_SLUG_PATTERN = re.compile(r"giveaway|contest|win|prize|promo", re.IGNORECASE)
+#: Whole slug tokens that mark a page as a giveaway/contest. A slug qualifies
+#: only when one of its hyphen/token-separated words EXACTLY equals one of
+#: these; substring hits such as ``win`` inside ``growing`` do not count.
+_GIVEAWAY_TOKENS = frozenset(
+    {
+        "giveaway",
+        "giveaways",
+        "contest",
+        "contests",
+        "win",
+        "wins",
+        "winner",
+        "prize",
+        "prizes",
+        "promo",
+        "promos",
+    }
+)
+
+#: Splits a slug into tokens on any run of non-alphanumeric characters.
+_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
 
 
 def parse_sitemap_locs(xml_text: str) -> list[str]:
@@ -59,7 +78,9 @@ def is_987_giveaway_url(url: str) -> bool:
     """Return whether ``url`` is a 987FM giveaway-style page.
 
     A URL qualifies when its path is under ``/radio/987/`` and the slug
-    (final path segment) matches the giveaway keyword pattern.
+    (final path segment) contains a whole hyphen/token-separated word that
+    exactly matches one of the giveaway keywords. Matching whole tokens (rather
+    than substrings) avoids false positives such as ``win`` inside ``growing``.
 
     Args:
         url: Absolute URL to test.
@@ -67,8 +88,9 @@ def is_987_giveaway_url(url: str) -> bool:
     path = urlsplit(url).path
     if not path.startswith(_RADIO_987_PREFIX):
         return False
-    slug = path.rsplit("/", 1)[-1]
-    return _SLUG_PATTERN.search(slug) is not None
+    slug = path.rsplit("/", 1)[-1].lower()
+    tokens = _TOKEN_SPLIT.split(slug)
+    return any(token in _GIVEAWAY_TOKENS for token in tokens)
 
 
 def poll_sitemap(

@@ -56,3 +56,22 @@ def test_phrase_vs_keyword() -> None:
 def test_below_threshold_returns_none() -> None:
     # single weak keyword "win" -> 1/6 ~= 0.166 < 0.5
     assert detect("you could win", "web") is None
+
+
+def test_keyword_only_at_threshold_does_not_fire() -> None:
+    # contest(2)+whatsapp(1) = 3/6 = 0.5 clears the threshold but has no
+    # multi-word phrase, so detect() must gate it to None.
+    score, matched = score_text("contest whatsapp")
+    assert score == 0.5
+    assert matched == ["contest", "whatsapp"]
+    assert detect("contest whatsapp", "web") is None
+
+
+def test_phrase_plus_keywords_still_fires() -> None:
+    detection = detect("call now win tickets", "web")
+    assert detection is not None
+    assert "call now" in detection.matched_terms
+
+
+def test_phrase_gate_is_case_insensitive() -> None:
+    assert detect("CALL NOW win", "web") is not None

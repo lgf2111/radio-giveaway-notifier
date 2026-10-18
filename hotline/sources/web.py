@@ -18,8 +18,27 @@ from urllib.request import Request, urlopen
 from hotline.config import Config
 from hotline.sources import Item
 
-#: Tags whose text content should never be treated as visible page text.
-_SKIP_TAGS = frozenset({"script", "style", "head", "title"})
+#: Tags whose text content should never be treated as visible page text. In
+#: addition to non-content tags (``script``/``style``/``head``/``title``) this
+#: includes chrome regions (``nav``/``header``/``footer``/``aside``/
+#: ``noscript``) whose copy is site boilerplate rather than contest text.
+_SKIP_TAGS = frozenset(
+    {
+        "script",
+        "style",
+        "head",
+        "title",
+        "nav",
+        "header",
+        "footer",
+        "aside",
+        "noscript",
+    }
+)
+
+#: Case-insensitive substrings in a ``class``/``id`` attribute that mark an
+#: element as chrome (navigation, sharing, social, footer) to be skipped.
+_CHROME_ATTR_KEYWORDS = ("share", "social", "footer", "nav", "menu", "breadcrumb")
 
 
 def fetch_url(url: str, user_agent: str, *, timeout: float = 10.0) -> str:
@@ -70,8 +89,53 @@ def robots_allowed(url: str, user_agent: str, checker: object | None = None) -> 
     return bool(checker.can_fetch(user_agent, url))
 
 
+#: HTML void elements, which never receive a matching end tag.
+_VOID_TAGS = frozenset(
+    {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
+)
+
+
+def _attrs_mark_chrome(attrs: list[tuple[str, str | None]]) -> bool:
+    """Return whether a start tag's ``class``/``id`` attributes mark it as chrome.
+
+    Args:
+        attrs: The ``(name, value)`` attribute pairs from :meth:`handle_starttag`.
+
+    Returns:
+        ``True`` if any ``class`` or ``id`` attribute value contains (as a
+        case-insensitive substring) one of :data:`_CHROME_ATTR_KEYWORDS`.
+    """
+    for name, value in attrs:
+        if name not in ("class", "id") or not value:
+            continue
+        lowered = value.lower()
+        if any(keyword in lowered for keyword in _CHROME_ATTR_KEYWORDS):
+            return True
+    return False
+
+
 class _TextExtractor(HTMLParser):
-    """Extract the ``<title>`` and visible body text from an HTML document."""
+    """Extract the ``<title>`` and visible body text from an HTML document.
+
+    Chrome regions (``nav``/``header``/``footer``/``aside``/``noscript`` and
+    any element whose ``class``/``id`` names a share/social/nav region) are
+    skipped so site boilerplate never reaches the scorer.
+    """
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -79,16 +143,33 @@ class _TextExtractor(HTMLParser):
         self.text_parts: list[str] = []
         self._skip_depth = 0
         self._in_title = False
+        # Per-element record of whether each open tag started a skip region, so
+        # end tags can close the right region even when markup nests or is
+        # unbalanced.
+        self._skip_stack: list[bool] = []
 
-    def handle_starttag(self, tag: str, attrs: object) -> None:
-        if tag in _SKIP_TAGS:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        # Void elements never get an end tag, so they must not push onto the
+        # skip stack (doing so would desync it against the end tags).
+        if tag in _VOID_TAGS:
+            return
+        is_skip = tag in _SKIP_TAGS or _attrs_mark_chrome(attrs)
+        self._skip_stack.append(is_skip)
+        if is_skip:
             self._skip_depth += 1
         if tag == "title":
             self._in_title = True
 
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        # Self-closing tags (``<tag/>``) open and close in one event, so they
+        # carry no text and never affect the skip stack.
+        return
+
     def handle_endtag(self, tag: str) -> None:
-        if tag in _SKIP_TAGS and self._skip_depth > 0:
-            self._skip_depth -= 1
+        if self._skip_stack:
+            was_skip = self._skip_stack.pop()
+            if was_skip and self._skip_depth > 0:
+                self._skip_depth -= 1
         if tag == "title":
             self._in_title = False
 

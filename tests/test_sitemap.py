@@ -22,6 +22,15 @@ MATCH_URLS = [
 NON_MATCH_987 = "https://www.melisten.sg/radio/987/987-weekday-schedule-3456789"
 OTHER_STATION = "https://www.melisten.sg/radio/class95/class-95-giveaway-pickle-beats-3485961"
 
+# Real false positive: "win" only appears as a substring of the token
+# "growing", so whole-token matching must REJECT this podcast page.
+FALSE_POSITIVE_987 = (
+    "https://www.melisten.sg/radio/987/"
+    "growing-beside-each-other-sonzz-joakim-gomez-sojo-987fm-9-3490431"
+)
+# A genuine giveaway slug under /radio/987/ must be ACCEPTED.
+GIVEAWAY_987 = "https://www.melisten.sg/radio/987/class-95-giveaway-pickle-beats-3485961"
+
 
 def _pages(read_fixture) -> dict[str, str]:
     """Serve giveaway HTML for every candidate page URL."""
@@ -48,6 +57,13 @@ def test_is_987_giveaway_url_filters() -> None:
     assert is_987_giveaway_url(NON_MATCH_987) is False
     # Matching slug under a different station is rejected.
     assert is_987_giveaway_url(OTHER_STATION) is False
+
+
+def test_is_987_giveaway_url_matches_whole_tokens_only() -> None:
+    # "win" inside "growing" is a substring, not a whole token -> rejected.
+    assert is_987_giveaway_url(FALSE_POSITIVE_987) is False
+    # A real "giveaway" token under /radio/987/ -> accepted.
+    assert is_987_giveaway_url(GIVEAWAY_987) is True
 
 
 def test_poll_sitemap_yields_only_matching_987_pages(

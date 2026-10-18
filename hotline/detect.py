@@ -28,6 +28,12 @@ Negation terms: ``closed``, ``no longer``, ``ended``.
 The raw weight sum is normalized as ``min(1.0, raw / SCORE_CAP)`` with
 ``SCORE_CAP = 6.0`` so a single strong phrase such as "call now" (weight 3)
 reaches ``0.5`` and clears the default threshold.
+
+A :class:`Detection` additionally requires at least one matched multi-word
+phrase term (``call now``, ``call in``, ``first caller``, ``phone lines``,
+``text in``). This gate keeps keyword-only hits such as "contest" + "whatsapp"
+(which sum to ``0.5``) from firing, since site chrome routinely mentions those
+single keywords.
 """
 
 from __future__ import annotations
@@ -51,6 +57,10 @@ TERM_WEIGHTS: dict[str, int] = {
 }
 
 NEGATION_TERMS: tuple[str, ...] = ("closed", "no longer", "ended")
+
+#: Multi-word phrase terms. A detection requires at least one of these, so a
+#: single weight-2 keyword (``giveaway``/``contest``) alone never fires.
+PHRASE_TERMS: frozenset[str] = frozenset(term for term in TERM_WEIGHTS if " " in term)
 
 
 @dataclass(frozen=True)
@@ -105,9 +115,14 @@ def detect(text: str, source: str, threshold: float = DEFAULT_THRESHOLD) -> Dete
         threshold: Minimum normalized score required to fire. Defaults to 0.5.
 
     Returns:
-        A :class:`Detection` when the score meets the threshold, else ``None``.
+        A :class:`Detection` when the score meets ``threshold`` AND at least one
+        matched term is a multi-word phrase (see :data:`PHRASE_TERMS`), else
+        ``None``. The phrase requirement stops keyword-only chrome such as
+        "contest" + "whatsapp" from firing even when it reaches the threshold.
     """
     score, matched_terms = score_text(text)
     if score < threshold:
+        return None
+    if not any(term in PHRASE_TERMS for term in matched_terms):
         return None
     return Detection(text=text, score=score, matched_terms=matched_terms, source=source)
