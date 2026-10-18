@@ -46,6 +46,70 @@ stream_url = "https://example.test/987.mp3"
     assert config.audio_stream_url == "https://example.test/987.mp3"
 
 
+def test_audio_and_summary_defaults(tmp_path: Path) -> None:
+    missing = tmp_path / "nope.toml"
+    config = load_config(missing, env={})
+    assert config.audio_model_size == "base"
+    assert config.audio_compute_type == "int8"
+    assert config.audio_clip_seconds == 45
+    assert config.audio_mode == "event"
+    assert config.audio_capture_format == "opus"
+    assert config.summary_mode == "rules"
+    assert config.summary_api_base is None
+    assert config.summary_model is None
+    assert config.summary_api_key is None
+
+
+def test_audio_and_summary_toml_loaded(tmp_path: Path) -> None:
+    toml = tmp_path / "config.toml"
+    toml.write_text(
+        """
+[audio]
+enabled = true
+stream_url = "https://example.test/987.aac"
+mode = "interval"
+model_size = "small"
+compute_type = "float16"
+clip_seconds = 30
+capture_format = "ogg"
+
+[summary]
+mode = "llm"
+api_base = "https://api.example.test/v1"
+model = "gpt-4o-mini"
+""",
+        encoding="utf-8",
+    )
+    config = load_config(toml, env={})
+    assert config.audio_enabled is True
+    assert config.audio_stream_url == "https://example.test/987.aac"
+    assert config.audio_mode == "interval"
+    assert config.audio_model_size == "small"
+    assert config.audio_compute_type == "float16"
+    assert config.audio_clip_seconds == 30
+    assert config.audio_capture_format == "ogg"
+    assert config.summary_mode == "llm"
+    assert config.summary_api_base == "https://api.example.test/v1"
+    assert config.summary_model == "gpt-4o-mini"
+
+
+def test_summary_api_key_is_env_only(tmp_path: Path) -> None:
+    toml = tmp_path / "config.toml"
+    toml.write_text(
+        """
+[summary]
+mode = "llm"
+api_key = "should-be-ignored"
+""",
+        encoding="utf-8",
+    )
+    config = load_config(toml, env={"HOTLINE_SUMMARY_API_KEY": "secret"})
+    assert config.summary_api_key == "secret"
+
+    config_no_env = load_config(toml, env={})
+    assert config_no_env.summary_api_key is None
+
+
 def test_env_secrets_merged(tmp_path: Path) -> None:
     missing = tmp_path / "nope.toml"
     env = {

@@ -48,4 +48,27 @@ interval = 45
 # is robots-disallowed. Use only a stream you are explicitly permitted to
 # capture.
 enabled = false
-# stream_url = "https://example.com/987fm.mp3"
+# Verified live 987FM audio stream (streamtheworld AAC+, HTTP 200). This host is
+# allowed and is NOT the robots-disallowed melisten.sg /liveradio/ path.
+stream_url = "https://22903.live.streamtheworld.com/987FM_PREM.aac"
+# How the audio source runs: "event" captures and transcribes a clip only when
+# a web/sitemap detection fires (lightweight). Other modes may sample on an
+# interval.
+mode = "event"
+# faster-whisper model size (tiny, base, small, ...). "base" balances speed and
+# accuracy on a free-tier CPU.
+model_size = "base"
+# faster-whisper compute type. "int8" keeps CPU usage and memory low.
+compute_type = "int8"
+# Seconds of audio to capture per clip for transcription + the voice note.
+clip_seconds = 45
+
+[summary]
+# How alert summaries are generated from the transcript.
+#   "rules" (default) builds the summary locally with no network or API key.
+#   "llm" calls an OpenAI-compatible chat API using HOTLINE_SUMMARY_API_KEY
+#         (set in the environment only -- see .env.example) plus the api_base
+#         and model below.
+mode = "rules"
+# api_base = "https://api.openai.com/v1"
+# model = "gpt-4o-mini"
