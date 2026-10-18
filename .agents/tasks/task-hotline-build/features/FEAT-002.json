@@ -1,0 +1,30 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "The three sources (web, social, audio), the Telegram notifier, and the 4 test fixtures, each with unit tests. Depends on FEAT-001 for the Item (hotline/sources/__init__.py) and Detection (hotline/detect.py) types and the uv environment. Independent of FEAT-003 (the CLI), which only wires these together.",
+  "status": "pending",
+  "steps": [
+    "Create the 4 fixtures (self-contained HTML, no external assets): fixtures/contest_page.html (<title> + body with 'call now', 'first caller', 'win tickets'), fixtures/giveaway_page.html ('text in', 'whatsapp', 'giveaway', 'contest'), fixtures/closed_page.html (active-looking terms PLUS 'closed'/'no longer'/'ended' for the negation path), fixtures/transcript.txt (~10s callout: 'call now to win tickets, phone lines are open').",
+    "Create hotline/sources/web.py: `fetch_url(url, user_agent) -> str` using urllib.request with a polite configurable User-Agent (injectable). `robots_allowed(url, user_agent, checker=None) -> bool` using urllib.robotparser (injectable/fakeable). `parse_html(html, url, source='web') -> Item` via an html.parser.HTMLParser subclass that extracts the <title> and visible text (skip script/style). `poll_web(config, fetch=fetch_url, robots_checker=robots_allowed) -> Iterator[Item]` iterating config.contest_urls + optional config.feed_url, skipping robots-disallowed URLs, parsing each fetched page into an Item. Module/function docstrings.",
+    "Create hotline/sources/social.py: `poll_social(config, fetch=<default urllib fetcher>) -> Iterator[Item]`. If config.x_bearer set, call a `_fetch_x(fetch, bearer)` helper and yield Items (source='x'); if config.ig_token set, call `_fetch_ig(fetch, token)` and yield Items (source='instagram'); if neither token is set, yield nothing and never raise. fetch callable injectable so tests supply responses; no live calls in tests.",
+    "Create hotline/sources/audio.py: `iter_windows(lines_or_stream, window_seconds=10) -> Iterator[str]` pure windowing (testable over a transcript). `transcribe_stream(config, transcriber=None, source='audio') -> Iterator[Item]`: if not config.audio_enabled -> log once and yield nothing; else if transcriber is None, lazily `from faster_whisper import WhisperModel` inside the function and build a real transcriber, catching ImportError to log once and yield nothing (graceful degrade); for each 10s window produce transcript text and yield an Item. Structure so tests pass a fake transcriber over fixtures/transcript.txt and can simulate ImportError.",
+    "Create hotline/notify.py: `format_alert(detection, item) -> str` (readable: title, url, matched terms, score). `send_telegram(text, token, chat_id, post=<default urllib POST>) -> dict` building the Bot API URL (https://api.telegram.org/bot<token>/sendMessage) and payload (chat_id, text) with urllib; post injectable. `notify(detection, item, config, dry_run=False, post=...) -> str`: when dry_run, format+print+return the message WITHOUT calling post; else call post with the correct URL/payload and return the response. Depends on detect.Detection and sources.Item.",
+    "Extend tests/conftest.py with fake fetcher/robots/sender/transcriber factories. Create tests/test_web.py, tests/test_social.py, tests/test_audio.py, tests/test_notify.py covering the plan.md 'Test cases' (parse each fixture into Items; injected robots disallow skips a URL; social no-op without tokens and yields with injected fetch+token; audio windowing + fake transcriber + disabled no-op + simulated ImportError; notify dry-run does not call sender, real path calls injected sender with correct URL/payload). No network."
+  ],
+  "acceptance_criteria": [
+    "`uv run pytest tests/test_web.py tests/test_social.py tests/test_audio.py tests/test_notify.py` passes all tests.",
+    "`uv run ruff check .` and `uv run ruff format --check .` are clean.",
+    "parse_html on contest_page.html yields an Item whose text drives detect() above threshold; closed_page.html yields an Item that detect() suppresses (None).",
+    "poll_web skips a URL when the injected robots checker disallows it.",
+    "poll_social yields nothing and raises nothing when no tokens are configured.",
+    "transcribe_stream yields nothing (no raise) when audio_enabled is False and when faster_whisper import is simulated to fail; yields Items from fixtures/transcript.txt with a fake transcriber.",
+    "notify(..., dry_run=True) returns a formatted string and the injected post is never called; dry_run=False calls post once with a URL containing the token and a payload containing chat_id and text."
+  ],
+  "verification": [
+    "uv run ruff check .",
+    "uv run ruff format --check .",
+    "uv run pytest tests/test_web.py tests/test_social.py tests/test_audio.py tests/test_notify.py"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

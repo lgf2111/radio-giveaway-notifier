@@ -1,0 +1,30 @@
+[project]
+name = "hotline"
+version = "0.1.0"
+description = "CLI that watches 987FM (Mediacorp, Singapore) for radio giveaways and pushes a Telegram alert."
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "MIT" }
+
+[project.optional-dependencies]
+audio = ["faster-whisper"]
+dev = ["pytest", "ruff"]
+
+[project.scripts]
+hotline = "hotline.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["hotline", "hotline.*"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
