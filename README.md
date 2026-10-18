@@ -11,6 +11,15 @@ for radio giveaways and pushes a **Telegram** alert within seconds. It catches
 - **Dedupe:** SQLite with a 7-day TTL so the same contest never alerts twice.
 - **Stdlib-first:** `urllib`, `sqlite3`, `tomllib`, `html.parser`. The only
   optional third-party dependency is `faster-whisper` for audio.
+- **Rich audio alerts:** when enabled, a detection triggers a short stream clip
+  that is transcribed on-device, summarised into a headline + the action to
+  take, and delivered to Telegram as a text message plus a voice note.
+
+> **System dependency:** the audio pipeline shells out to **ffmpeg** to pull
+> and clip the stream. ffmpeg is a *system* package (install it with your OS
+> package manager — `apt install ffmpeg`, `brew install ffmpeg`), **not** a pip
+> dependency. Without ffmpeg on `PATH` the audio source degrades to a no-op and
+> text alerts keep working.
 
 ## Quick start (uv)
 
@@ -68,6 +77,34 @@ variables (never from TOML, so they can't be committed with a config).
    set -a; source .env; set +a
    ```
 
+### Audio pipeline options (`[audio]` / `[summary]`)
+
+The optional audio pipeline is **off by default**. When enabled, a web/sitemap
+detection triggers a short clip capture → on-device transcription → summary →
+rich Telegram alert. Configure it in `config.toml` (see `config.example.toml`
+for the shipped defaults). Requires the `audio` extra (`uv sync --extra audio`)
+and **ffmpeg** on `PATH`.
+
+`[audio]` table:
+
+| Key            | Default                                               | Meaning                                                               |
+|----------------|-------------------------------------------------------|-----------------------------------------------------------------------|
+| `enabled`      | `false`                                               | Master switch. `--audio` on the CLI force-enables it for one run.     |
+| `stream_url`   | `https://22903.live.streamtheworld.com/987FM_PREM.aac`| Verified live 987FM stream (streamtheworld AAC+, HTTP 200).           |
+| `mode`         | `event`                                               | `event` clips only when a web/sitemap detection fires; else `continuous`. |
+| `model_size`   | `base`                                                | faster-whisper model (`tiny`, `base`, `small`, …). `base` suits a free-tier CPU. |
+| `compute_type` | `int8`                                                | faster-whisper compute type. `int8` keeps CPU/memory low.             |
+| `clip_seconds` | `45`                                                  | Seconds of audio captured per clip (transcribed + sent as the voice note). |
+
+`[summary]` table:
+
+| Key                       | Default   | Meaning                                                                         |
+|---------------------------|-----------|---------------------------------------------------------------------------------|
+| `mode`                    | `rules`   | `rules` builds the summary locally (no network/API key); `llm` calls an API.    |
+| `api_base`                | *(unset)* | OpenAI-compatible base URL, used only when `mode = "llm"`.                       |
+| `model`                   | *(unset)* | Chat model name, used only when `mode = "llm"`.                                  |
+| `HOTLINE_SUMMARY_API_KEY` | *(unset)* | API key for `mode = "llm"`. **Env var only** (never in TOML). Falls back to rules on any error. |
+
 ## Usage
 
 ```bash
@@ -79,6 +116,12 @@ uv run python -m hotline once --dry-run
 
 # Restrict to specific sources (repeatable: web, sitemap, social, audio):
 uv run python -m hotline once --source web --source sitemap
+
+# Force the audio pipeline on for this run (even if [audio] enabled = false).
+# With --dry-run this demonstrates a rich alert fully OFFLINE from the bundled
+# fixtures (no ffmpeg, no whisper, no network): it prints the summary headline,
+# the suggested action, the transcript, and "would attach <clip>".
+uv run python -m hotline once --dry-run --audio
 
 # Watch continuously, polling on an interval (default 45s):
 uv run python -m hotline watch --interval 45 --config config.toml
@@ -143,15 +186,118 @@ permitted to capture (see the LEGAL / ToS / ETHICS section).
 
 The verified state after this revision:
 
-- `uv run pytest` → **58 passed**.
+- `uv run pytest` → **87 passed**.
 - `uv run ruff check .` → clean.
 - `uv run ruff format --check .` → clean.
 - `uv run python -m hotline once --dry-run` → 3 fixture detections offline.
+- `uv run python -m hotline once --dry-run --audio` → the same 3 detections
+  plus a rich audio alert built from the bundled fixtures (no ffmpeg/network).
 - `make install` uses `uv sync --extra dev` and does **not** install
   `faster-whisper`/`torch` (that is the opt-in `make install-audio` target).
 - The 987FM station page returned HTTP 200 with ~98,619 bytes on a live fetch
   (the user's reported finding; the test suite itself never touches the
   network).
+
+## Deploy on Oracle Cloud Always Free (24/7, free)
+
+hotline is light enough to run forever on an **Oracle Cloud Infrastructure
+(OCI) Always Free** Ampere A1 (ARM64) VM — the audio pipeline included. Ready-made
+deploy artifacts live in [`deploy/`](deploy/): a `Dockerfile`, a systemd unit
+(`hotline.service`), and an env template (`hotline.env.example`).
+
+### 1. Create an Always-Free Ampere A1 (ARM64) VM
+
+- In the OCI console create a Compute instance using the **Ampere A1 (Arm)**
+  shape (`VM.Standard.A1.Flex`), image **Ubuntu** or **Oracle Linux**.
+- **Free-tier sizing (important):** beginning **2026-06-15**, Oracle reduced the
+  Always-Free Ampere A1 allowance to **2 OCPU / 12 GB of memory total across the
+  whole tenancy**, down from the old 4 OCPU / 24 GB. ([OCI Free Tier docs](https://docs.oracle.com/iaas/Content/FreeTier/freetier.htm)).
+  hotline fits comfortably inside this: run the default **event** mode with the
+  small **`base`** whisper model (`compute_type = "int8"`), and keep the whole
+  A1 footprint under 2 OCPU / 12 GB so the instance is not disabled. A single
+  1 OCPU / 4–6 GB A1 VM is plenty.
+- *Content was rephrased for compliance with licensing restrictions.*
+
+### 2. Networking: outbound-only, no ingress
+
+hotline is **outbound-only** — it polls the melisten web pages, pulls the audio
+stream, and calls the Telegram Bot API. It never listens for inbound
+connections. So you do **not** need to open any ports: leave the default
+locked-down security list / Network Security Group in place (no ingress rules
+beyond SSH if you want remote admin). This keeps the attack surface minimal.
+
+### 3. Install the system dependencies
+
+ffmpeg is a required system package. Install it plus either uv or Docker:
+
+```bash
+# Ubuntu
+sudo apt-get update && sudo apt-get install -y ffmpeg
+
+# uv (for the systemd option)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### 4. Run it — pick systemd OR Docker
+
+**Option A — systemd (recommended for a bare VM):**
+
+```bash
+# Put the project at /opt/hotline and install core + audio.
+sudo git clone https://github.com/lgf2111/radio-giveaway-notifier /opt/hotline
+cd /opt/hotline && uv sync --extra audio
+
+# Dedicated user + config/secret locations the unit expects.
+sudo useradd --system --home-dir /opt/hotline --shell /usr/sbin/nologin hotline
+sudo install -d -o hotline -g hotline /etc/hotline /var/lib/hotline
+sudo cp config.example.toml /etc/hotline/config.toml        # edit: set [audio] enabled = true
+sudo cp deploy/hotline.env.example /etc/hotline/hotline.env # edit: real token + chat id
+sudo chown hotline:hotline /etc/hotline/hotline.env && sudo chmod 600 /etc/hotline/hotline.env
+sudo chown -R hotline:hotline /opt/hotline
+
+# Install and start the service (Restart=always, starts on boot).
+sudo cp deploy/hotline.service /etc/systemd/system/hotline.service
+sudo systemctl daemon-reload && sudo systemctl enable --now hotline
+journalctl -u hotline -f
+```
+
+The unit runs `hotline watch` as the `hotline` user, loads secrets from
+`EnvironmentFile=/etc/hotline/hotline.env`, reads `/etc/hotline/config.toml`,
+persists the dedupe db at `/var/lib/hotline/hotline.db`, and restarts on any
+exit. See the comments in [`deploy/hotline.service`](deploy/hotline.service).
+
+**Option B — Docker:**
+
+```bash
+# ARM64 image with ffmpeg + the [audio] extra baked in.
+docker build -t hotline -f deploy/Dockerfile .
+
+docker run -d --name hotline --restart unless-stopped \
+  --env-file /etc/hotline/hotline.env \
+  -v /etc/hotline/config.toml:/etc/hotline/config.toml:ro \
+  -v hotline-data:/data \
+  hotline watch --config /etc/hotline/config.toml --db /data/hotline.db
+```
+
+### 5. Keep the free instance from being reclaimed
+
+Oracle may reclaim **idle** Always-Free compute, and it now **disables** A1
+instances that exceed the 2 OCPU / 12 GB tenancy cap. To stay safe: keep your
+total A1 usage under the cap, keep the instance genuinely busy (hotline's `watch`
+loop and periodic stream pulls help), check the console for reclamation/limit
+notices, and consider upgrading to a **Pay As You Go** account (you still keep
+the Always-Free resources, and they are not reclaimed for inactivity).
+
+### 6. Legal / ToS note
+
+This deployment is for **personal use**. Respect the audio stream provider's
+Terms of Service, and record only short clips for your own personal
+transcription — do not redistribute captured audio. The streamtheworld URL
+(`https://22903.live.streamtheworld.com/987FM_PREM.aac`) is the allowed stream
+the audio source uses. melisten's `robots.txt` disallows `/api/`,
+`/liveradio/`, `/user/`, and `/login`, so the audio source must **not** point at
+`https://live.melisten.sg/liveradio/987`. See the full
+[LEGAL / ToS / ETHICS](#️-legal--tos--ethics) section below.
 
 ## Development
 

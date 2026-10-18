@@ -1,0 +1,52 @@
+# systemd unit for hotline -- 987FM giveaway notifier.
+#
+# Install (as root), assuming the project is installed at /opt/hotline with a
+# venv at /opt/hotline/.venv (e.g. `uv sync --extra audio` inside /opt/hotline):
+#
+#   sudo useradd --system --home-dir /opt/hotline --shell /usr/sbin/nologin hotline
+#   sudo install -d -o hotline -g hotline /etc/hotline /var/lib/hotline
+#   sudo cp config.example.toml /etc/hotline/config.toml      # then edit it
+#   sudo cp deploy/hotline.env.example /etc/hotline/hotline.env  # then edit it
+#   sudo chown hotline:hotline /etc/hotline/hotline.env
+#   sudo chmod 600 /etc/hotline/hotline.env                   # secrets: owner-only
+#   sudo cp deploy/hotline.service /etc/systemd/system/hotline.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now hotline
+#   journalctl -u hotline -f                                  # follow logs
+#
+# Adjust ExecStart if your install path or Python entrypoint differs.
+
+[Unit]
+Description=hotline 987FM giveaway notifier (watch)
+Documentation=https://github.com/lgf2111/radio-giveaway-notifier
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hotline
+Group=hotline
+
+# Secrets (HOTLINE_TELEGRAM_TOKEN, HOTLINE_CHAT_ID, optional
+# HOTLINE_SUMMARY_API_KEY) come from the environment file, never from the repo.
+EnvironmentFile=/etc/hotline/hotline.env
+
+WorkingDirectory=/opt/hotline
+# Non-secret settings live in the config; the dedupe db persists across restarts.
+ExecStart=/opt/hotline/.venv/bin/python -m hotline watch \
+    --config /etc/hotline/config.toml \
+    --db /var/lib/hotline/hotline.db
+
+# Keep it running 24/7; restart on any exit.
+Restart=always
+RestartSec=10
+
+# Light sandboxing (outbound-only workload, no privileged access needed).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/hotline
+
+[Install]
+WantedBy=multi-user.target
