@@ -62,6 +62,21 @@ model_size = "base"
 compute_type = "int8"
 # Seconds of audio to capture per clip for transcription + the voice note.
 clip_seconds = 45
+# Music-vs-speech gate. A cheap local DSP classifier (pure stdlib, no extra pip
+# deps) runs on each captured clip BEFORE Whisper and skips transcription when
+# the clip is confidently music. It is the main lever keeping Whisper cost low.
+# It is speech-biased and fails open: anything ambiguous, silent, or
+# undecodable (e.g. ffmpeg missing) is treated as speech and transcribed, so a
+# giveaway callout is never skipped.
+gate_enabled = true
+# Only SKIP transcription when the gate is at least this confident the clip is
+# music (0.0-1.0). Below this it transcribes anyway. Raise it to skip only very
+# confident music; lower it to skip more aggressively.
+gate_min_confidence = 0.6
+# Classifier backend. "builtin" is the pure-stdlib DSP gate above. "silero" is
+# reserved and NOT implemented -- selecting it falls back to builtin with a
+# logged warning and adds no dependency.
+gate_backend = "builtin"
 
 [summary]
 # How alert summaries are generated from the transcript.

@@ -218,6 +218,58 @@ def fake_runner():
 
 
 @pytest.fixture
+def fake_classifier():
+    """Return a factory building a fake music-vs-speech classifier.
+
+    The factory takes a :class:`~hotline.speech_gate.Classification` (or
+    ``is_speech`` / ``confidence`` / ``reason`` kwargs) and returns a
+    ``classify(path) -> Classification`` callable recording the paths it was
+    called with on ``classify.calls``.
+    """
+    from hotline.speech_gate import Classification
+
+    def _factory(
+        classification: Classification | None = None,
+        *,
+        is_speech: bool = True,
+        confidence: float = 0.9,
+        reason: str = "fake classification",
+    ) -> Callable[[object], Classification]:
+        result = classification or Classification(
+            is_speech=is_speech, confidence=confidence, reason=reason
+        )
+
+        def _classify(path: object) -> Classification:
+            _classify.calls.append(path)  # type: ignore[attr-defined]
+            return result
+
+        _classify.calls = []  # type: ignore[attr-defined]
+        return _classify
+
+    return _factory
+
+
+@pytest.fixture
+def fake_pcm_decoder():
+    """Return a factory building a fake PCM decoder (path -> samples).
+
+    The factory takes a ``list[float]`` of synthetic samples and returns a
+    ``decoder(path) -> list[float]`` callable recording the paths it was called
+    with on ``decoder.calls``. No ffmpeg is invoked.
+    """
+
+    def _factory(samples: list[float]) -> Callable[[object], list[float]]:
+        def _decode(path: object) -> list[float]:
+            _decode.calls.append(path)  # type: ignore[attr-defined]
+            return list(samples)
+
+        _decode.calls = []  # type: ignore[attr-defined]
+        return _decode
+
+    return _factory
+
+
+@pytest.fixture
 def fake_clip_transcriber():
     """Return a factory building a fake clip transcriber (path -> text).
 

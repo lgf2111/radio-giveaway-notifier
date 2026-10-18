@@ -100,6 +100,32 @@ and **ffmpeg** on `PATH`.
 | `model_size`   | `base`                                                | faster-whisper model (`tiny`, `base`, `small`, …). `base` suits a free-tier CPU. |
 | `compute_type` | `int8`                                                | faster-whisper compute type. `int8` keeps CPU/memory low.             |
 | `clip_seconds` | `45`                                                  | Seconds of audio captured per clip (transcribed + sent as the voice note). |
+| `gate_enabled` | `true`                                                | Run the music-vs-speech gate before transcription (skip confident music). |
+| `gate_min_confidence` | `0.6`                                          | Only SKIP transcription when the gate is at least this confident it is music. |
+| `gate_backend` | `builtin`                                             | Classifier backend. `builtin` is the stdlib DSP gate; `silero` is reserved/not implemented (falls back to builtin). |
+
+#### Music vs. speech gate
+
+Transcription is the one expensive step, so a cheap local gate runs on every
+captured clip **before** Whisper and skips transcribing songs. The classifier is
+pure Python stdlib (short-time RMS energy, zero-crossing rate, and spectral
+flatness computed over a small pure-Python radix-2 FFT) — **no numpy, no extra
+pip deps**. ffmpeg is used only to decode the clip to PCM and is injectable.
+
+The gate is the main lever keeping Whisper cost low, and it is deliberately
+conservative:
+
+- **Speech-biased.** It returns *music* only when the evidence is strong and
+  steady; anything ambiguous classifies as speech, so a giveaway callout is
+  never skipped.
+- **Fails open.** If ffmpeg is missing or decoding fails, the clip is treated as
+  speech and transcribed anyway.
+
+Transcription is skipped only when the gate decides *music* **and** its
+confidence meets `gate_min_confidence`. Configure it with `gate_enabled` and
+`gate_min_confidence` in `[audio]`. The `gate_backend` key is reserved: `silero`
+is not implemented and falls back to the builtin gate with a logged warning,
+adding no dependency.
 
 `[summary]` table:
 

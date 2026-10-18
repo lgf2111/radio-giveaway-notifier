@@ -24,6 +24,9 @@ TOML layout (all tables and keys optional)::
     compute_type = "int8"
     clip_seconds = 45
     capture_format = "opus"
+    gate_enabled = true
+    gate_min_confidence = 0.6
+    gate_backend = "builtin"
 
     [summary]
     mode = "rules"
@@ -69,6 +72,9 @@ class Config:
     audio_clip_seconds: int = 45
     audio_mode: str = "event"
     audio_capture_format: str = "opus"
+    audio_gate_enabled: bool = True
+    audio_gate_min_confidence: float = 0.6
+    audio_gate_backend: str = "builtin"
     summary_mode: str = "rules"
     summary_api_base: str | None = None
     summary_model: str | None = None
@@ -127,6 +133,9 @@ def load_config(
     audio_clip_seconds = audio.get("clip_seconds", 45)
     audio_mode = audio.get("mode", "event")
     audio_capture_format = audio.get("capture_format", "opus")
+    audio_gate_enabled = audio.get("gate_enabled", True)
+    audio_gate_min_confidence = audio.get("gate_min_confidence", 0.6)
+    audio_gate_backend = audio.get("gate_backend", "builtin")
 
     summary_mode = summary.get("mode", "rules")
     summary_api_base = summary.get("api_base")
@@ -145,6 +154,9 @@ def load_config(
         audio_clip_seconds=int(audio_clip_seconds),
         audio_mode=str(audio_mode),
         audio_capture_format=str(audio_capture_format),
+        audio_gate_enabled=bool(audio_gate_enabled),
+        audio_gate_min_confidence=float(audio_gate_min_confidence),
+        audio_gate_backend=str(audio_gate_backend),
         summary_mode=str(summary_mode),
         summary_api_base=str(summary_api_base) if summary_api_base is not None else None,
         summary_model=str(summary_model) if summary_model is not None else None,

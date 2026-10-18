@@ -54,6 +54,9 @@ def test_audio_and_summary_defaults(tmp_path: Path) -> None:
     assert config.audio_clip_seconds == 45
     assert config.audio_mode == "event"
     assert config.audio_capture_format == "opus"
+    assert config.audio_gate_enabled is True
+    assert config.audio_gate_min_confidence == 0.6
+    assert config.audio_gate_backend == "builtin"
     assert config.summary_mode == "rules"
     assert config.summary_api_base is None
     assert config.summary_model is None
@@ -73,6 +76,10 @@ compute_type = "float16"
 clip_seconds = 30
 capture_format = "ogg"
 
+gate_enabled = false
+gate_min_confidence = 0.8
+gate_backend = "silero"
+
 [summary]
 mode = "llm"
 api_base = "https://api.example.test/v1"
@@ -83,6 +90,9 @@ model = "gpt-4o-mini"
     config = load_config(toml, env={})
     assert config.audio_enabled is True
     assert config.audio_stream_url == "https://example.test/987.aac"
+    assert config.audio_gate_enabled is False
+    assert config.audio_gate_min_confidence == 0.8
+    assert config.audio_gate_backend == "silero"
     assert config.audio_mode == "interval"
     assert config.audio_model_size == "small"
     assert config.audio_compute_type == "float16"
