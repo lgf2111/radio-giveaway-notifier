@@ -14,6 +14,7 @@ runs the other way (``cli`` imports ``pipeline``), avoiding a cycle.
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import tempfile
 from collections.abc import Callable
@@ -21,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 from hotline.audio_capture import capture_clip
-from hotline.config import Config
+from hotline.config import Config, Station
 from hotline.sources.audio import transcribe_clip
 from hotline.speech_gate import Classification, classify_clip
 
@@ -124,3 +125,74 @@ def handle_audio_trigger(
         # Injected transcriber stays (path) -> str and is called unchanged.
         transcript = transcribe(clip_path)
     return transcript, clip_path
+
+
+def capture_clips_concurrently(
+    stations: list[Station],
+    config: Config,
+    *,
+    capture: Capture = _default_capture,
+    max_workers: int | None = None,
+    now: Callable[[], datetime] = datetime.now,
+) -> dict[str, Path | None]:
+    """Capture each station's audio clip concurrently, returning slug->path.
+
+    Each station's clip is captured in its own thread via a
+    :class:`concurrent.futures.ThreadPoolExecutor`. Capture is I/O-bound
+    (ffmpeg runs as a subprocess and releases the GIL), so the pool gives real
+    parallelism: one poll's capture phase costs roughly a single
+    ``config.audio_clip_seconds`` window instead of ``len(stations)`` windows.
+    Only *capture* runs here — the music/speech gate and Whisper transcription
+    stay sequential in the caller.
+
+    Each capture writes a distinct per-station temp file
+    (``hotline-clip-<slug>-<stamp>.ogg`` under :func:`tempfile.gettempdir`) so
+    parallel ffmpeg processes never collide. A capture that raises or returns
+    ``None`` is logged and recorded as ``None`` for that slug without aborting
+    the others.
+
+    Args:
+        stations: Stations to capture. Each must carry a ``stream_url``.
+        config: Runtime configuration supplying ``audio_clip_seconds`` and the
+            ``audio_max_parallel_captures`` concurrency cap.
+        capture: Injectable capture callable
+            ``(stream_url, seconds, out_path) -> Path | None``, so tests run
+            offline. Defaults to the real ffmpeg-backed capture.
+        max_workers: Optional override for the worker cap (tests). When
+            ``None`` the cap is ``config.audio_max_parallel_captures``. The
+            effective pool size is bounded to ``[1, len(stations)]``.
+        now: Injectable clock used to build unique clip file names.
+
+    Returns:
+        A ``{station.slug: Path | None}`` mapping — the captured clip path per
+        station, or ``None`` when that station's capture failed.
+    """
+    if not stations:
+        return {}
+
+    cap = max_workers if max_workers is not None else config.audio_max_parallel_captures
+    worker_count = max(1, min(len(stations), cap))
+
+    tmp_dir = Path(tempfile.gettempdir())
+
+    def _capture_one(station: Station) -> Path | None:
+        stamp = now().strftime("%Y%m%d-%H%M%S-%f")
+        out_path = str(tmp_dir / f"hotline-clip-{station.slug}-{stamp}.ogg")
+        return capture(station.stream_url, config.audio_clip_seconds, out_path)
+
+    results: dict[str, Path | None] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_to_slug = {
+            executor.submit(_capture_one, station): station.slug for station in stations
+        }
+        for future in concurrent.futures.as_completed(future_to_slug):
+            slug = future_to_slug[future]
+            try:
+                results[slug] = future.result()
+            except Exception:  # noqa: BLE001 - one capture must not abort others
+                logger.warning("pipeline: audio capture failed for station %r", slug, exc_info=True)
+                results[slug] = None
+            else:
+                if results[slug] is None:
+                    logger.warning("pipeline: audio capture returned no clip for station %r", slug)
+    return results

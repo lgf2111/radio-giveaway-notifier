@@ -8,12 +8,13 @@ Store-backed dedupe on a repeat.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
-from hotline.config import Config
+from hotline.config import Config, Station
 from hotline.detect import detect
 from hotline.notify import notify_rich
-from hotline.pipeline import handle_audio_trigger
+from hotline.pipeline import capture_clips_concurrently, handle_audio_trigger
 from hotline.sources import Item
 from hotline.store import Store, item_hash
 from hotline.summarize import summarize
@@ -309,3 +310,88 @@ def test_gate_disabled_always_transcribes_without_consulting_classifier(
     assert transcript == "call now to win tickets"
     assert transcribe.calls == [clip]
     assert classify.calls == []
+
+
+def _station(slug: str, *, stream_url: str | None = None) -> Station:
+    return Station(
+        name=slug.upper(),
+        slug=slug,
+        language="en",
+        stream_url=stream_url or f"https://stream.test/{slug}.aac",
+        audio_enabled=True,
+    )
+
+
+def test_capture_clips_concurrently_captures_all_and_maps_slugs() -> None:
+    config = _config(audio_max_parallel_captures=8)
+    stations = [_station("a"), _station("b"), _station("c")]
+    seen: list[tuple[str, int, str]] = []
+    lock = threading.Lock()
+
+    def capture(stream_url: str, seconds: int, out_path: str) -> Path:
+        with lock:
+            seen.append((stream_url, seconds, out_path))
+        return Path(out_path)
+
+    clips = capture_clips_concurrently(stations, config, capture=capture)
+
+    # Every eligible station was captured exactly once and maps to a path.
+    assert set(clips) == {"a", "b", "c"}
+    assert all(clips[slug] is not None for slug in clips)
+    assert len(seen) == 3
+    # Each station passed its own stream_url and the configured clip length.
+    assert {s[0] for s in seen} == {st.stream_url for st in stations}
+    assert {s[1] for s in seen} == {config.audio_clip_seconds}
+    # Per-station out paths are distinct and contain the slug.
+    out_paths = [s[2] for s in seen]
+    assert len(set(out_paths)) == 3
+    for st in stations:
+        assert any(f"-{st.slug}-" in path for path in out_paths)
+
+
+def test_capture_clips_concurrently_failure_does_not_abort_others() -> None:
+    config = _config()
+    stations = [_station("a"), _station("b"), _station("c")]
+
+    def capture(stream_url: str, seconds: int, out_path: str) -> Path | None:
+        if stream_url.endswith("b.aac"):
+            raise RuntimeError("ffmpeg blew up")
+        if stream_url.endswith("c.aac"):
+            return None
+        return Path(out_path)
+
+    clips = capture_clips_concurrently(stations, config, capture=capture)
+
+    # The raising station and the None-returning station map to None; the other
+    # still captured — one failure must not abort the rest.
+    assert set(clips) == {"a", "b", "c"}
+    assert clips["a"] is not None
+    assert clips["b"] is None
+    assert clips["c"] is None
+
+
+def test_capture_clips_concurrently_runs_in_parallel() -> None:
+    # Structural concurrency proof: a Barrier of n only releases once all n
+    # captures are in flight simultaneously, so a serial executor would hang.
+    config = _config()
+    stations = [_station("a"), _station("b"), _station("c"), _station("d")]
+    n = len(stations)
+    barrier = threading.Barrier(n, timeout=5)
+
+    def capture(stream_url: str, seconds: int, out_path: str) -> Path:
+        barrier.wait()  # raises BrokenBarrierError if captures don't overlap
+        return Path(out_path)
+
+    clips = capture_clips_concurrently(stations, config, capture=capture, max_workers=n)
+
+    assert set(clips) == {"a", "b", "c", "d"}
+    assert all(clips[slug] is not None for slug in clips)
+
+
+def test_capture_clips_concurrently_empty_stations() -> None:
+    config = _config()
+
+    def capture(stream_url: str, seconds: int, out_path: str) -> Path:
+        raise AssertionError("capture must not be called for empty stations")
+
+    assert capture_clips_concurrently([], config, capture=capture) == {}

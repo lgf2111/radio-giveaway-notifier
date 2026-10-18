@@ -32,7 +32,7 @@ from hotline import __version__
 from hotline.config import Config, Station, load_config
 from hotline.detect import Detection, detect
 from hotline.notify import notify, notify_rich
-from hotline.pipeline import handle_audio_trigger
+from hotline.pipeline import capture_clips_concurrently, handle_audio_trigger
 from hotline.sources import Item
 from hotline.sources.audio import iter_windows, transcribe_stream
 from hotline.sources.sitemap import poll_sitemap
@@ -358,10 +358,99 @@ def _run_poll(args: argparse.Namespace, config: Config, store: Store) -> int:
         store.mark_notified(hash_)
         notified += 1
 
-    for station in audio_stations:
-        notified += _run_audio(args, config, store, station, web_fired=notified > 0)
+    if use_fixtures:
+        # Keep the offline fixtures demo serial and byte-identical: a single
+        # synthetic station reading the bundled transcript + clip, no executor.
+        for station in audio_stations:
+            notified += _run_audio(args, config, store, station, web_fired=notified > 0)
+    else:
+        # Real multi-station path: capture all eligible stations' clips
+        # concurrently (one ~clip_seconds window for all), then process them
+        # sequentially so the gate and Whisper transcription stay bounded.
+        eligible = _eligible_audio_stations(args, config, audio_stations, web_fired=notified > 0)
+        if eligible:
+            clips = capture_clips_concurrently(eligible, config)
+            for station in eligible:
+                notified += _process_station_clip(
+                    args, config, store, station, clips.get(station.slug)
+                )
 
     return notified
+
+
+def _eligible_audio_stations(
+    args: argparse.Namespace,
+    config: Config,
+    stations: list[Station],
+    *,
+    web_fired: bool,
+) -> list[Station]:
+    """Return the stations whose audio should be captured this poll pass.
+
+    Applies exactly the same gate as :func:`_run_audio`: the audio path must be
+    active (``--audio`` or ``config.audio_enabled``) AND one of a web/sitemap
+    detection fired this pass, ``audio_mode`` is ``"continuous"``, or the user
+    forced audio with ``--audio``. A station is kept only when it has a
+    ``stream_url`` and either its ``audio_enabled`` is set or audio is forced.
+    """
+    forced = bool(getattr(args, "audio", False))
+    if not _audio_active(args, config):
+        return []
+    if not (web_fired or config.audio_mode == "continuous" or forced):
+        return []
+    return [
+        station for station in stations if station.stream_url and (station.audio_enabled or forced)
+    ]
+
+
+def _process_station_clip(
+    args: argparse.Namespace,
+    config: Config,
+    store: Store,
+    station: Station,
+    clip_path: Path | None,
+) -> int:
+    """Process one already-captured clip: gate, transcribe, detect, notify.
+
+    The clip was captured in the concurrent phase; here the (blocking-free)
+    gate + speech-gated Whisper step runs by reusing
+    :func:`handle_audio_trigger` with a capture hook that simply returns the
+    pre-captured ``clip_path``. Transcription stays sequential (one clip at a
+    time). Returns 1 if a fresh audio detection was alerted, else 0.
+    """
+    if clip_path is None:
+        return 0
+
+    transcript, clip = handle_audio_trigger(
+        config,
+        stream_url=station.stream_url,
+        language=lang_for(station),
+        capture=lambda *_: clip_path,
+    )
+    if not transcript or clip is None:
+        return 0
+
+    detection = detect(transcript, "audio")
+    if detection is None:
+        return 0
+
+    stream_url = station.stream_url or config.audio_stream_url or "audio-stream"
+    item = Item(
+        title=f"{station.name} on-air callout",
+        url=f"{stream_url}#audio&station={station.slug}",
+        text=transcript,
+        published=None,
+        source="audio",
+    )
+    hash_ = item_hash(item)
+    if not store.should_notify(hash_):
+        return 0
+
+    summary = summarize(transcript, detection, config)
+    dry_run = args.dry_run or not (config.telegram_token and config.chat_id)
+    notify_rich(summary, detection, transcript, clip, config, dry_run=dry_run)
+    store.mark_notified(hash_)
+    return 1
 
 
 def _audio_active(args: argparse.Namespace, config: Config) -> bool:

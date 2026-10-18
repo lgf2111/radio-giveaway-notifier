@@ -208,6 +208,222 @@ def test_station_without_stream_skips_audio(make_multi_station_config, make_stat
     store.close()
 
 
+def test_eligible_audio_stations_continuous_selects_streamable(
+    make_multi_station_config, make_station
+):
+    """Continuous mode selects every station with a stream + audio_enabled."""
+    a = make_station(name="A", slug="a", stream_url="https://s.test/a.aac", audio_enabled=True)
+    b = make_station(name="B", slug="b", stream_url="https://s.test/b.aac", audio_enabled=True)
+    silent = make_station(name="C", slug="c", stream_url=None, audio_enabled=False)
+    config = make_multi_station_config([a, b, silent], audio_mode="continuous")
+    args = _args(["once"])
+
+    # No web detection fired, but continuous mode runs audio anyway.
+    eligible = cli._eligible_audio_stations(args, config, config.stations, web_fired=False)
+    assert [s.slug for s in eligible] == ["a", "b"]
+
+
+def test_eligible_audio_stations_event_mode_requires_web_fired(
+    make_multi_station_config, make_station
+):
+    """In event mode audio only runs when a web detection fired this pass."""
+    a = make_station(name="A", slug="a", stream_url="https://s.test/a.aac", audio_enabled=True)
+    config = make_multi_station_config([a], audio_mode="event", audio_enabled=True)
+    args = _args(["once"])
+
+    assert cli._eligible_audio_stations(args, config, config.stations, web_fired=False) == []
+    fired = cli._eligible_audio_stations(args, config, config.stations, web_fired=True)
+    assert [s.slug for s in fired] == ["a"]
+
+
+def test_eligible_audio_stations_force_includes_disabled_with_stream(
+    make_multi_station_config, make_station
+):
+    """``--audio`` force-enables a station that has a stream but audio_enabled off."""
+    forced_ok = make_station(
+        name="A", slug="a", stream_url="https://s.test/a.aac", audio_enabled=False
+    )
+    no_stream = make_station(name="B", slug="b", stream_url=None, audio_enabled=False)
+    config = make_multi_station_config([forced_ok, no_stream])
+    args = _args(["once", "--audio"])
+
+    eligible = cli._eligible_audio_stations(args, config, config.stations, web_fired=False)
+    # The streamless station is still excluded; the one with a stream is forced in.
+    assert [s.slug for s in eligible] == ["a"]
+
+
+def test_continuous_pass_captures_all_eligible_and_processes(
+    make_multi_station_config, make_station, monkeypatch, tmp_path
+):
+    """A continuous multi-station pass captures every eligible station and
+    processes each sequentially, producing one alert per station."""
+    monkeypatch.chdir(tmp_path)
+    a = make_station(
+        name="Station A", slug="a", stream_url="https://s.test/a.aac", audio_enabled=True
+    )
+    b = make_station(
+        name="Station B", slug="b", stream_url="https://s.test/b.aac", audio_enabled=True
+    )
+    # No telegram token/chat => notify_rich prints (dry-run) instead of POSTing,
+    # keeping the test offline while still counting fresh alerts.
+    config = make_multi_station_config([a, b], audio_mode="continuous")
+
+    captured: list[str] = []
+
+    def fake_capture_concurrently(stations, cfg, **kwargs):
+        captured.extend(s.slug for s in stations)
+        return {s.slug: tmp_path / f"{s.slug}.ogg" for s in stations}
+
+    triggered: list[tuple[str | None, object]] = []
+
+    def fake_trigger(cfg, *, stream_url=None, language=None, capture, **kwargs):
+        clip = capture()  # the pre-captured path hook
+        triggered.append((stream_url, clip))
+        return "call now to win tickets", clip
+
+    monkeypatch.setattr(cli, "capture_clips_concurrently", fake_capture_concurrently)
+    monkeypatch.setattr(cli, "handle_audio_trigger", fake_trigger)
+
+    store = Store(":memory:")
+    args = _args(["once"])
+    notified = cli._run_poll(args, config, store)
+    store.close()
+
+    # Both eligible stations captured, and both processed into fresh alerts.
+    assert captured == ["a", "b"]
+    assert notified == 2
+    assert [t[0] for t in triggered] == ["https://s.test/a.aac", "https://s.test/b.aac"]
+
+
+def test_continuous_pass_transcription_only_for_speech(
+    make_multi_station_config, make_station, monkeypatch, tmp_path
+):
+    """Whisper (via the trigger) only yields a transcript for speech clips; a
+    music clip returns no transcript and produces no alert."""
+    monkeypatch.chdir(tmp_path)
+    speechy = make_station(
+        name="Speechy", slug="sp", stream_url="https://s.test/sp.aac", audio_enabled=True
+    )
+    musicy = make_station(
+        name="Musicy", slug="mu", stream_url="https://s.test/mu.aac", audio_enabled=True
+    )
+    config = make_multi_station_config([speechy, musicy], audio_mode="continuous")
+
+    def fake_capture_concurrently(stations, cfg, **kwargs):
+        return {s.slug: tmp_path / f"{s.slug}.ogg" for s in stations}
+
+    transcribed: list[str] = []
+
+    def fake_trigger(cfg, *, stream_url=None, language=None, capture, **kwargs):
+        clip = capture()
+        # Music station: gate skips transcription -> empty transcript, clip kept.
+        if stream_url.endswith("mu.aac"):
+            return "", clip
+        transcribed.append(stream_url)
+        return "call now to win tickets", clip
+
+    monkeypatch.setattr(cli, "capture_clips_concurrently", fake_capture_concurrently)
+    monkeypatch.setattr(cli, "handle_audio_trigger", fake_trigger)
+
+    store = Store(":memory:")
+    notified = cli._run_poll(_args(["once"]), config, store)
+    store.close()
+
+    # Only the speech station alerts; the music station is gated out.
+    assert transcribed == ["https://s.test/sp.aac"]
+    assert notified == 1
+
+
+def test_continuous_pass_forwards_per_station_language(
+    make_multi_station_config, make_station, monkeypatch, tmp_path
+):
+    """Each station's language hint reaches the trigger (en vs zh)."""
+    monkeypatch.chdir(tmp_path)
+    en = make_station(
+        name="EN",
+        slug="en",
+        language="en",
+        stream_url="https://s.test/en.aac",
+        audio_enabled=True,
+    )
+    zh = make_station(
+        name="ZH",
+        slug="zh",
+        language="zh",
+        stream_url="https://s.test/zh.aac",
+        audio_enabled=True,
+    )
+    config = make_multi_station_config([en, zh], audio_mode="continuous")
+
+    def fake_capture_concurrently(stations, cfg, **kwargs):
+        return {s.slug: tmp_path / f"{s.slug}.ogg" for s in stations}
+
+    langs: dict[str, object] = {}
+
+    def fake_trigger(cfg, *, stream_url=None, language=None, capture, **kwargs):
+        clip = capture()
+        langs[stream_url] = language
+        return "call now to win tickets", clip
+
+    monkeypatch.setattr(cli, "capture_clips_concurrently", fake_capture_concurrently)
+    monkeypatch.setattr(cli, "handle_audio_trigger", fake_trigger)
+
+    store = Store(":memory:")
+    cli._run_poll(_args(["once"]), config, store)
+    store.close()
+
+    assert langs["https://s.test/en.aac"] == "en"
+    assert langs["https://s.test/zh.aac"] == "zh"
+
+
+def test_continuous_pass_dedupes_per_station(
+    make_multi_station_config, make_station, monkeypatch, tmp_path
+):
+    """Two stations with identical transcripts still produce two distinct
+    alerts (dedupe keys include the station slug)."""
+    monkeypatch.chdir(tmp_path)
+    a = make_station(name="A", slug="a", stream_url="https://s.test/a.aac", audio_enabled=True)
+    b = make_station(name="B", slug="b", stream_url="https://s.test/b.aac", audio_enabled=True)
+    config = make_multi_station_config([a, b], audio_mode="continuous")
+
+    def fake_capture_concurrently(stations, cfg, **kwargs):
+        return {s.slug: tmp_path / f"{s.slug}.ogg" for s in stations}
+
+    def fake_trigger(cfg, *, stream_url=None, language=None, capture, **kwargs):
+        clip = capture()
+        # Identical transcript for both stations.
+        return "call now to win tickets", clip
+
+    monkeypatch.setattr(cli, "capture_clips_concurrently", fake_capture_concurrently)
+    monkeypatch.setattr(cli, "handle_audio_trigger", fake_trigger)
+
+    store = Store(":memory:")
+    notified = cli._run_poll(_args(["once"]), config, store)
+    store.close()
+
+    # Both alert despite identical transcripts: per-station dedupe keys differ.
+    assert notified == 2
+
+
+def test_process_station_clip_none_clip_is_skipped(
+    make_multi_station_config, make_station, monkeypatch, tmp_path
+):
+    """A None clip (capture failed for that station) processes to 0 alerts and
+    never invokes the trigger."""
+    monkeypatch.chdir(tmp_path)
+    a = make_station(name="A", slug="a", stream_url="https://s.test/a.aac", audio_enabled=True)
+    config = make_multi_station_config([a], telegram_token="tok", chat_id="chat")
+
+    def boom(*a, **k):
+        raise AssertionError("trigger must not run for a None clip")
+
+    monkeypatch.setattr(cli, "handle_audio_trigger", boom)
+    store = Store(":memory:")
+    fired = cli._process_station_clip(_args(["once"]), config, store, a, None)
+    store.close()
+    assert fired == 0
+
+
 def test_lang_for_maps_languages(make_station):
     assert cli.lang_for(make_station(language="en")) == "en"
     assert cli.lang_for(make_station(language="zh")) == "zh"

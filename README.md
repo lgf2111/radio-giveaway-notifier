@@ -181,6 +181,24 @@ and **ffmpeg** on `PATH`.
 | `gate_enabled` | `true`                                                | Run the music-vs-speech gate before transcription (skip confident music). |
 | `gate_min_confidence` | `0.6`                                          | Only SKIP transcription when the gate is at least this confident it is music. |
 | `gate_backend` | `builtin`                                             | Classifier backend. `builtin` is the stdlib DSP gate; `silero` is reserved/not implemented (falls back to builtin). |
+| `max_parallel_captures` | `8`                                          | Max stations whose clips are captured concurrently per poll (caps simultaneous ffmpeg processes). See [Concurrent capture](#concurrent-capture). |
+
+#### Concurrent capture
+
+In a multi-station watch, each poll captures **all** enabled stations' clips
+**concurrently** rather than one after another. Capture is I/O-bound — ffmpeg
+runs as a subprocess and releases the GIL — so a `ThreadPoolExecutor` gives real
+parallelism: the capture phase of a poll costs roughly a single `clip_seconds`
+window (~45s) regardless of how many stations are watched, instead of
+`N × clip_seconds`. This keeps an always-on N-station watch roughly
+constant-cost, so it stays light enough to run 24/7 on a MacBook.
+
+The music/speech gate and Whisper transcription stay **sequential and gated**:
+after the clips are captured in parallel, each is processed one at a time, and
+Whisper only runs on clips the gate classifies as speech. `max_parallel_captures`
+(default `8`, in `[audio]`) caps how many ffmpeg processes run at once; lower it
+to reduce simultaneous captures. The offline `--dry-run` demo stays serial and
+unchanged (a single synthetic station reading bundled fixtures).
 
 #### Music vs. speech gate
 

@@ -200,6 +200,7 @@ class Config:
     audio_gate_enabled: bool = True
     audio_gate_min_confidence: float = 0.6
     audio_gate_backend: str = "builtin"
+    audio_max_parallel_captures: int = 8
     summary_mode: str = "rules"
     summary_api_base: str | None = None
     summary_model: str | None = None
@@ -318,6 +319,7 @@ def load_config(
     audio_gate_enabled = audio.get("gate_enabled", True)
     audio_gate_min_confidence = audio.get("gate_min_confidence", 0.6)
     audio_gate_backend = audio.get("gate_backend", "builtin")
+    audio_max_parallel_captures = audio.get("max_parallel_captures", 8)
 
     summary_mode = summary.get("mode", "rules")
     summary_api_base = summary.get("api_base")
@@ -359,6 +361,7 @@ def load_config(
         audio_gate_enabled=bool(audio_gate_enabled),
         audio_gate_min_confidence=float(audio_gate_min_confidence),
         audio_gate_backend=str(audio_gate_backend),
+        audio_max_parallel_captures=int(audio_max_parallel_captures),
         summary_mode=str(summary_mode),
         summary_api_base=str(summary_api_base) if summary_api_base is not None else None,
         summary_model=str(summary_model) if summary_model is not None else None,

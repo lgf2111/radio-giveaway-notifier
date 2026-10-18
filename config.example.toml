@@ -152,6 +152,10 @@ model_size = "base"
 compute_type = "int8"
 # Seconds of audio to capture per clip for transcription + the voice note.
 clip_seconds = 45
+# Max stations whose clips are captured concurrently per poll. Capture is
+# I/O-bound (ffmpeg releases the GIL), so 8 covers all stations cheaply in one
+# ~clip_seconds window; lower it to cap simultaneous ffmpeg processes.
+max_parallel_captures = 8
 # Music-vs-speech gate. A cheap local DSP classifier (pure stdlib, no extra pip
 # deps) runs on each captured clip BEFORE Whisper and skips transcription when
 # the clip is confidently music. It is the main lever keeping Whisper cost low.

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from hotline.config import DEFAULT_POLL_INTERVAL, DEFAULT_STATIONS, Config, load_config
 
 
@@ -299,8 +301,18 @@ telegram_token = "also-ignored"
     assert config.chat_id is None
 
 
-def test_dotenv_file_populates_secrets(tmp_path: Path) -> None:
+def test_dotenv_file_populates_secrets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Secrets present only in a .env file are loaded when env is not injected."""
+    # Clear any ambient HOTLINE_* secrets so the developer's real shell env
+    # (which layers OVER .env) can't mask the values under test.
+    for var in (
+        "HOTLINE_TELEGRAM_TOKEN",
+        "HOTLINE_CHAT_ID",
+        "HOTLINE_SUMMARY_API_KEY",
+        "HOTLINE_X_BEARER",
+        "HOTLINE_IG_TOKEN",
+    ):
+        monkeypatch.delenv(var, raising=False)
     missing_toml = tmp_path / "nope.toml"
     dotenv = tmp_path / ".env"
     dotenv.write_text(
