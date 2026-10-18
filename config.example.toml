@@ -12,13 +12,18 @@
 # fixtures/ pages and prints detections.
 
 [source]
-# Public 987FM contest / giveaway pages to poll. Replace these with the real
-# pages you are permitted to monitor, and always respect the site's robots.txt
-# and Terms of Service (hotline checks robots.txt before fetching).
+# Public 987FM contest / giveaway pages to poll. Always respect the site's
+# robots.txt and Terms of Service (hotline checks robots.txt before fetching).
+# The 987FM station landing page is server-rendered and robots-allowed.
 contest_urls = [
-  # "https://www.melisten.sg/radio/987",
-  # "https://www.mediacorp.sg/987fm/contests",
+  "https://www.melisten.sg/radio/987",
 ]
+
+# Sitemap discovery: hotline fetches this sitemap, keeps <loc> entries under
+# /radio/987/ whose slug matches giveaway|contest|win|prize|promo, and polls
+# those pages. The melisten sitemap is robots-allowed. See the README
+# "Target: 987FM" section for the research behind these defaults.
+sitemap_url = "https://www.melisten.sg/sitemap.xml"
 
 # Optional public feed (RSS/Atom/JSON) to poll alongside the pages.
 # feed_url = "https://example.com/987fm/feed.xml"
@@ -37,5 +42,10 @@ interval = 45
 # and transcribes 10-second windows locally with faster-whisper (install the
 # `audio` extra). Only enable this if you have the right to capture and
 # transcribe the stream -- see the LEGAL / ToS / ETHICS section in the README.
+#
+# WARNING: melisten's robots.txt disallows /api/, /liveradio/, /user/, /login.
+# Do NOT point stream_url at https://live.melisten.sg/liveradio/987 -- that path
+# is robots-disallowed. Use only a stream you are explicitly permitted to
+# capture.
 enabled = false
 # stream_url = "https://example.com/987fm.mp3"

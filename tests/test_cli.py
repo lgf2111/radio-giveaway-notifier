@@ -52,6 +52,37 @@ def test_source_web_restricts_sources(capsys, monkeypatch, tmp_path):
     assert "Audio window" not in out
 
 
+def test_once_dry_run_with_db_dedupes_on_second_run(capsys, monkeypatch, tmp_path):
+    """``once --dry-run --db PATH`` prints 3 first, then 0 on a repeat run."""
+    monkeypatch.chdir(tmp_path)
+    db = tmp_path / "demo.db"
+
+    rc = cli.main(["once", "--dry-run", "--db", str(db)])
+    assert rc == 0
+    first = capsys.readouterr().out
+    assert first.count("Giveaway alert") >= 3
+
+    # Second run against the same on-disk db dedupes everything away.
+    rc = cli.main(["once", "--dry-run", "--db", str(db)])
+    assert rc == 0
+    second = capsys.readouterr().out
+    assert "Giveaway alert" not in second
+    assert "Done: 0 detection(s) notified." in second
+
+
+def test_once_dry_run_no_db_is_repeatable(capsys, monkeypatch, tmp_path):
+    """Plain ``--dry-run`` (no --db) uses an in-memory store every time."""
+    monkeypatch.chdir(tmp_path)
+
+    cli.main(["once", "--dry-run"])
+    first = capsys.readouterr().out
+    cli.main(["once", "--dry-run"])
+    second = capsys.readouterr().out
+
+    assert first.count("Giveaway alert") >= 3
+    assert second.count("Giveaway alert") >= 3
+
+
 def test_unknown_subcommand_returns_nonzero():
     """An unknown subcommand exits with a non-zero code via argparse."""
     with pytest.raises(SystemExit) as excinfo:

@@ -77,11 +77,14 @@ uv run python -m hotline once --config config.toml
 # Dry run: print detections instead of sending Telegram messages:
 uv run python -m hotline once --dry-run
 
-# Restrict to specific sources (repeatable: web, social, audio):
-uv run python -m hotline once --source web --source social
+# Restrict to specific sources (repeatable: web, sitemap, social, audio):
+uv run python -m hotline once --source web --source sitemap
 
 # Watch continuously, polling on an interval (default 45s):
 uv run python -m hotline watch --interval 45 --config config.toml
+
+# Use a specific dedupe database (default: hotline.db):
+uv run python -m hotline once --config config.toml --db hotline.db
 
 # Send (or dry-run) a sample alert to verify Telegram delivery:
 uv run python -m hotline test-alert
@@ -89,6 +92,66 @@ uv run python -m hotline test-alert --dry-run
 ```
 
 Exit code is `0` on success and non-zero on bad usage.
+
+### Dedupe and the `--db` flag
+
+Both `once` and `watch` accept `--db PATH` (default `hotline.db`) to choose the
+SQLite database that backs the 7-day dedupe. Because a contest is only alerted
+once, a second run against the same on-disk database prints
+`0 detection(s)` — the dedupe has already seen everything. Re-demo from scratch
+with a throwaway database:
+
+```bash
+uv run python -m hotline once --dry-run --db /tmp/demo.db   # prints 3 detections
+uv run python -m hotline once --dry-run --db /tmp/demo.db   # prints 0 (deduped)
+```
+
+Plain `--dry-run` with **no** `--db` uses an in-memory store instead, so the
+zero-setup offline demo stays repeatable and prints 3 detections every time:
+
+```bash
+uv run python -m hotline once --dry-run   # always prints 3 detections
+```
+
+## Target: 987FM
+
+These are the verified research findings behind the shipped defaults in
+`config.example.toml`:
+
+- **Contest/giveaway pages** live at
+  `https://www.melisten.sg/radio/<station>/<slug>-<id>`. The verified example
+  `https://www.melisten.sg/radio/class95/class-95-giveaway-pickle-beats-3485961`
+  returns HTTP 200 and is server-rendered (the giveaway text is in the HTML, no
+  JavaScript needed).
+- **Sitemap discovery.** `https://www.melisten.sg/sitemap.xml` is
+  robots-allowed and lists 681 URLs, 14 of them under `/radio/987/`. The
+  `sitemap` source fetches it and keeps `<loc>` entries whose path is under
+  `/radio/987/` and whose slug matches `giveaway|contest|win|prize|promo`
+  (case-insensitive), then fetches and detects those pages.
+- **The 987FM station page** `https://www.melisten.sg/radio/987` is the shipped
+  default in `contest_urls`.
+
+### ⚠️ robots.txt and the audio source
+
+melisten's `robots.txt` disallows `/api/`, `/liveradio/`, `/user/`, and
+`/login`. The live stream endpoint `https://live.melisten.sg/liveradio/987`
+sits under a disallowed path, so the audio source **must not** point at it. The
+audio source stays disabled unless you supply a stream you are explicitly
+permitted to capture (see the LEGAL / ToS / ETHICS section).
+
+### Smoke test
+
+The verified state after this revision:
+
+- `uv run pytest` → **58 passed**.
+- `uv run ruff check .` → clean.
+- `uv run ruff format --check .` → clean.
+- `uv run python -m hotline once --dry-run` → 3 fixture detections offline.
+- `make install` uses `uv sync --extra dev` and does **not** install
+  `faster-whisper`/`torch` (that is the opt-in `make install-audio` target).
+- The 987FM station page returned HTTP 200 with ~98,619 bytes on a live fetch
+  (the user's reported finding; the test suite itself never touches the
+  network).
 
 ## Development
 

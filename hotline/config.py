@@ -10,6 +10,7 @@ TOML layout (all tables and keys optional)::
     [source]
     contest_urls = ["https://.../contests"]
     feed_url = "https://.../feed.xml"
+    sitemap_url = "https://.../sitemap.xml"
     user_agent = "hotline/0.1 (+contact)"
 
     [poll]
@@ -48,6 +49,7 @@ class Config:
 
     contest_urls: list[str] = field(default_factory=list)
     feed_url: str | None = None
+    sitemap_url: str | None = None
     poll_interval: int = DEFAULT_POLL_INTERVAL
     user_agent: str = DEFAULT_USER_AGENT
     audio_stream_url: str | None = None
@@ -93,6 +95,7 @@ def load_config(
     )
 
     feed_url = source.get("feed_url")
+    sitemap_url = source.get("sitemap_url")
     user_agent = source.get("user_agent", DEFAULT_USER_AGENT)
 
     poll_interval = poll.get("interval", DEFAULT_POLL_INTERVAL)
@@ -103,6 +106,7 @@ def load_config(
     return Config(
         contest_urls=contest_urls,
         feed_url=str(feed_url) if feed_url is not None else None,
+        sitemap_url=str(sitemap_url) if sitemap_url is not None else None,
         poll_interval=int(poll_interval),
         user_agent=str(user_agent),
         audio_stream_url=str(audio_stream_url) if audio_stream_url is not None else None,

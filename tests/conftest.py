@@ -72,6 +72,36 @@ def make_robots():
 
 
 @pytest.fixture
+def make_sitemap_fetcher():
+    """Return a factory building a fake fetcher for the sitemap source.
+
+    The factory takes the sitemap URL, the sitemap XML body, and a
+    ``{page_url: html}`` mapping. The returned ``fetch(url, user_agent) -> body``
+    serves the sitemap XML for the sitemap URL and the matching HTML for page
+    URLs, records calls on ``fetch.calls``, and raises for unknown URLs so a
+    test can assert exactly which URLs were fetched.
+    """
+
+    def _factory(
+        sitemap_url: str,
+        sitemap_xml: str,
+        pages: dict[str, str],
+    ) -> Callable[[str, str], str]:
+        def _fetch(url: str, user_agent: str) -> str:
+            _fetch.calls.append((url, user_agent))  # type: ignore[attr-defined]
+            if url == sitemap_url:
+                return sitemap_xml
+            if url in pages:
+                return pages[url]
+            raise AssertionError(f"no fake response configured for {url}")
+
+        _fetch.calls = []  # type: ignore[attr-defined]
+        return _fetch
+
+    return _factory
+
+
+@pytest.fixture
 def make_social_fetcher():
     """Return a factory building a fake social fetcher.
 

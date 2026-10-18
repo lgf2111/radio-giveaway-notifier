@@ -31,15 +31,19 @@ from hotline.detect import Detection, detect
 from hotline.notify import notify
 from hotline.sources import Item
 from hotline.sources.audio import iter_windows, transcribe_stream
+from hotline.sources.sitemap import poll_sitemap
 from hotline.sources.social import poll_social
 from hotline.sources.web import parse_html, poll_web
 from hotline.store import Store, item_hash
 
 #: All selectable source names, in default polling order.
-ALL_SOURCES = ("web", "social", "audio")
+ALL_SOURCES = ("web", "sitemap", "social", "audio")
 
 #: Default SQLite dedupe database path (gitignored).
 DEFAULT_DB_PATH = "hotline.db"
+
+#: Sentinel marking the ``--db`` flag as left at its default (not passed).
+_DB_UNSET = object()
 
 #: Repo fixtures directory used for the offline ``once --dry-run`` fallback.
 _FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
@@ -98,6 +102,33 @@ def _add_common_flags(parser: argparse.ArgumentParser) -> None:
         help="Restrict to a source (repeatable). Default: all three.",
     )
     parser.add_argument("--config", help="Path to a TOML config file.")
+    parser.add_argument(
+        "--db",
+        default=_DB_UNSET,
+        metavar="PATH",
+        help=(
+            "SQLite dedupe database path (default: hotline.db). When passed "
+            "explicitly it is used even under --dry-run, so repeat runs dedupe; "
+            "plain --dry-run with no --db uses an in-memory store."
+        ),
+    )
+
+
+def _db_path(args: argparse.Namespace) -> str:
+    """Return the configured db path, or the default when --db was unset."""
+    return DEFAULT_DB_PATH if args.db is _DB_UNSET else args.db
+
+
+def _store_for(args: argparse.Namespace) -> Store:
+    """Build the dedupe :class:`Store` honouring --dry-run and --db.
+
+    A plain ``--dry-run`` (no explicit ``--db``) uses an in-memory store so the
+    offline demo is repeatable. Passing ``--db PATH`` always uses that on-disk
+    path, even under ``--dry-run``, so a second run dedupes to zero.
+    """
+    if args.dry_run and args.db is _DB_UNSET:
+        return Store(":memory:")
+    return Store(_db_path(args))
 
 
 def _selected_sources(args: argparse.Namespace) -> tuple[str, ...]:
@@ -109,6 +140,8 @@ def _iter_items(config: Config, sources: tuple[str, ...]) -> Iterator[Item]:
     """Yield items from each selected live source."""
     if "web" in sources:
         yield from poll_web(config)
+    if "sitemap" in sources:
+        yield from poll_sitemap(config)
     if "social" in sources:
         yield from poll_social(config)
     if "audio" in sources:
@@ -141,6 +174,7 @@ def _config_has_live_targets(config: Config) -> bool:
     return bool(
         config.contest_urls
         or config.feed_url
+        or config.sitemap_url
         or config.x_bearer
         or config.ig_token
         or (config.audio_enabled and config.audio_stream_url)
@@ -184,10 +218,11 @@ def _emit(detection: Detection, item: Item, config: Config, *, dry_run: bool) ->
 def cmd_once(args: argparse.Namespace, config: Config) -> int:
     """Handle the ``once`` subcommand: a single polling pass.
 
-    In ``--dry-run`` the dedupe state is kept in an in-memory store so the
-    offline demo is repeatable and never mutates the on-disk database.
+    A plain ``--dry-run`` keeps dedupe state in an in-memory store so the
+    offline demo is repeatable. Passing ``--db PATH`` uses that on-disk
+    database even under ``--dry-run`` so repeat runs dedupe to zero.
     """
-    store = Store(":memory:" if args.dry_run else DEFAULT_DB_PATH)
+    store = _store_for(args)
     try:
         count = _run_poll(args, config, store)
     finally:
@@ -199,11 +234,11 @@ def cmd_once(args: argparse.Namespace, config: Config) -> int:
 def cmd_watch(args: argparse.Namespace, config: Config) -> int:
     """Handle the ``watch`` subcommand: poll forever on an interval.
 
-    In ``--dry-run`` the dedupe state is kept in an in-memory store so no
-    on-disk database is written.
+    A plain ``--dry-run`` keeps dedupe state in an in-memory store so no
+    on-disk database is written; passing ``--db PATH`` uses that path instead.
     """
     interval = args.interval
-    store = Store(":memory:" if args.dry_run else DEFAULT_DB_PATH)
+    store = _store_for(args)
     print(f"Watching every {interval}s (Ctrl-C to stop).")
     try:
         while True:
