@@ -1,5 +1,0 @@
-{
-  "verdict": "APPROVED",
-  "findings": [],
-  "summary": "All acceptance criteria met: ruff check/format clean, 48 pytest pass, once --dry-run exits 0 with 3 offline detections, uv.lock in sync, no committed secrets, README has uv-first + LEGAL/ToS/ETHICS, CI uses uv + Python 3.13, all spec modules present with docstrings and type hints."
-}

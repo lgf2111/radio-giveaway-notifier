@@ -10,3 +10,5 @@ __pycache__/
 
 # Local databases
 *.db
+# Agent workflow scratch artifacts
+.agents/

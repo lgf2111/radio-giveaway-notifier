@@ -1,7 +1,0 @@
-{
-  "task_id": "task-hotline-build",
-  "task_description": "Greenfield Python 3.13 CLI 'hotline' that watches 987FM (Mediacorp Singapore) for radio giveaways/contests across web/social/audio sources, scores text with a phrase+keyword ruleset, dedupes via sqlite with a 7-day TTL, and pushes a Telegram alert. Stdlib-first (urllib, sqlite3, tomllib); optional faster-whisper audio extra imported lazily; uv as the project/dependency manager; pytest + ruff; no network in tests (fixtures only).",
-  "status": "completed",
-  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003"],
-  "blocked_reason": null
-}
