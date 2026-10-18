@@ -7,6 +7,7 @@ No test performs network I/O.
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
@@ -157,6 +158,51 @@ def make_transcriber():
         def _transcribe(window: str) -> str:
             _transcribe.calls.append(window)  # type: ignore[attr-defined]
             return transform(window) if transform else window
+
+        _transcribe.calls = []  # type: ignore[attr-defined]
+        return _transcribe
+
+    return _factory
+
+
+@pytest.fixture
+def fake_runner():
+    """Return a factory building a fake ``subprocess.run`` for ffmpeg.
+
+    The factory takes an optional ``returncode`` (default 0). The returned
+    ``run(argv, **kwargs) -> CompletedProcess`` records the argv list it was
+    called with on ``run.calls``, writes a stub file at the ffmpeg output path
+    (the last argv element), and returns a ``CompletedProcess`` with the given
+    return code. No real ffmpeg is invoked.
+    """
+
+    def _factory(returncode: int = 0) -> Callable[..., subprocess.CompletedProcess]:
+        def _run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            _run.calls.append(argv)  # type: ignore[attr-defined]
+            if returncode == 0:
+                out_path = Path(argv[-1])
+                out_path.write_bytes(b"stub-audio")
+            return subprocess.CompletedProcess(argv, returncode, stdout=b"", stderr=b"")
+
+        _run.calls = []  # type: ignore[attr-defined]
+        return _run
+
+    return _factory
+
+
+@pytest.fixture
+def fake_clip_transcriber():
+    """Return a factory building a fake clip transcriber (path -> text).
+
+    Distinct from :func:`make_transcriber` (which echoes window text): this
+    takes fixed transcript text and returns it for any audio path, recording
+    the paths it was called with on ``transcriber.calls``.
+    """
+
+    def _factory(text: str) -> Callable[[str], str]:
+        def _transcribe(path: str) -> str:
+            _transcribe.calls.append(path)  # type: ignore[attr-defined]
+            return text
 
         _transcribe.calls = []  # type: ignore[attr-defined]
         return _transcribe

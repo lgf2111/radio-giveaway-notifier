@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterable, Iterator
+from pathlib import Path
 
 from hotline.config import Config
 from hotline.sources import Item
@@ -25,6 +26,48 @@ DEFAULT_WINDOW_SECONDS = 10
 
 #: A transcriber turns one window (its index + text/sample payload) into text.
 Transcriber = Callable[[str], str]
+
+#: A clip transcriber turns a path to an audio file into transcript text.
+ClipTranscriber = Callable[[str], str]
+
+
+def transcribe_clip(
+    audio_path: str | Path,
+    *,
+    model_size: str = "base",
+    compute_type: str = "int8",
+    transcriber: ClipTranscriber | None = None,
+) -> str:
+    """Transcribe an audio *file* into text.
+
+    Args:
+        audio_path: Path to a captured audio clip on disk.
+        model_size: faster-whisper model size (e.g. ``"base"``). Used only when
+            no ``transcriber`` is injected.
+        compute_type: faster-whisper compute type (e.g. ``"int8"``). Used only
+            when no ``transcriber`` is injected.
+        transcriber: Callable ``(path) -> transcript``. When provided it is used
+            directly; otherwise a real faster-whisper model is built lazily.
+
+    Returns:
+        The transcript text, or ``""`` (after logging once) when
+        ``faster-whisper`` is not installed.
+    """
+    if transcriber is not None:
+        return transcriber(str(audio_path))
+
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        logger.warning(
+            "audio: faster-whisper is not installed; cannot transcribe clip. "
+            "Install the 'audio' extra to enable transcription."
+        )
+        return ""
+
+    model = WhisperModel(model_size, device="cpu", compute_type=compute_type)
+    segments, _info = model.transcribe(str(audio_path))
+    return " ".join(segment.text for segment in segments).strip()
 
 
 def iter_windows(
