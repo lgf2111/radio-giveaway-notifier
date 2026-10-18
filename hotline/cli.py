@@ -21,6 +21,8 @@ Exposes three subcommands:
 from __future__ import annotations
 
 import argparse
+import logging
+import sys
 import time
 from collections.abc import Iterator
 from dataclasses import replace
@@ -62,14 +64,24 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--version", action="version", version=f"hotline {__version__}")
+    _add_verbose_flag(parser)
+
+    # Shared parent so ``-v`` also works AFTER the subcommand
+    # (``hotline once -v`` as well as ``hotline -v once``).
+    verbose_parent = argparse.ArgumentParser(add_help=False)
+    _add_verbose_flag(verbose_parent)
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    once = subparsers.add_parser("once", help="Poll all sources once and notify.")
+    once = subparsers.add_parser(
+        "once", help="Poll all sources once and notify.", parents=[verbose_parent]
+    )
     _add_common_flags(once)
     once.set_defaults(func=cmd_once)
 
-    watch = subparsers.add_parser("watch", help="Poll repeatedly on an interval.")
+    watch = subparsers.add_parser(
+        "watch", help="Poll repeatedly on an interval.", parents=[verbose_parent]
+    )
     _add_common_flags(watch)
     watch.add_argument(
         "--interval",
@@ -80,7 +92,9 @@ def build_parser() -> argparse.ArgumentParser:
     watch.set_defaults(func=cmd_watch)
 
     test_alert = subparsers.add_parser(
-        "test-alert", help="Send (or dry-run) a sample Telegram alert."
+        "test-alert",
+        help="Send (or dry-run) a sample Telegram alert.",
+        parents=[verbose_parent],
     )
     test_alert.add_argument(
         "--dry-run",
@@ -91,6 +105,24 @@ def build_parser() -> argparse.ArgumentParser:
     test_alert.set_defaults(func=cmd_test_alert)
 
     return parser
+
+
+def _add_verbose_flag(parser: argparse.ArgumentParser) -> None:
+    """Add the repeatable ``-v/--verbose`` flag to ``parser``.
+
+    Added both to the top-level parser and to a shared parent for the
+    subcommands so ``-v`` is accepted before or after the subcommand.
+    """
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help=(
+            "Increase log verbosity to stderr: -v for INFO (ffmpeg capture, "
+            "music/speech gate decisions, transcript), -vv for DEBUG."
+        ),
+    )
 
 
 def _add_common_flags(parser: argparse.ArgumentParser) -> None:
@@ -354,16 +386,22 @@ def _run_audio(
     transcript and clip come from the bundled fixtures so no ffmpeg or network
     is touched. Returns 1 if a fresh audio detection was alerted, else 0.
     """
+    forced = bool(getattr(args, "audio", False))
     if not _audio_active(args, config):
         return 0
-    if not (web_fired or config.audio_mode == "continuous"):
+    # Fire when a web/sitemap detection triggered this pass, in continuous
+    # mode, or whenever the user explicitly asked for audio with --audio (a
+    # manual capture-now request that should not depend on a web detection).
+    if not (web_fired or config.audio_mode == "continuous" or forced):
         return 0
 
     if args.dry_run:
         transcript = (_FIXTURES_DIR / "callout_transcript.txt").read_text(encoding="utf-8")
         clip_path = _FIXTURES_DIR / "audio_clip.ogg"
     else:
-        if not (station.audio_enabled and station.stream_url):
+        # --audio force-enables capture for a station that has a stream URL even
+        # when its config leaves audio_enabled False; otherwise respect the flag.
+        if not station.stream_url or (not station.audio_enabled and not forced):
             return 0
         transcript, clip = handle_audio_trigger(
             config, stream_url=station.stream_url, language=lang_for(station)
@@ -470,6 +508,24 @@ def cmd_test_alert(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def _configure_logging(verbosity: int) -> None:
+    """Route library logs to stderr based on ``-v`` count.
+
+    Args:
+        verbosity: ``0`` leaves logging unconfigured (quiet, as before), ``1``
+            enables INFO, ``2`` or more enables DEBUG. Logs go to stderr so they
+            never mix with the stdout result lines or any piped output.
+    """
+    if verbosity <= 0:
+        return
+    level = logging.INFO if verbosity == 1 else logging.DEBUG
+    logging.basicConfig(
+        level=level,
+        stream=sys.stderr,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse ``argv`` and dispatch to a subcommand handler.
 
@@ -482,5 +538,13 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = build_parser()
     args = parser.parse_args(argv)
+    # ``-v`` is accepted both before and after the subcommand. With argparse
+    # ``parents=``, the position-specific value can be shadowed, so take the
+    # larger of the two counts from an independent pre-scan.
+    pre = argparse.ArgumentParser(add_help=False)
+    _add_verbose_flag(pre)
+    scan_argv = sys.argv[1:] if argv is None else argv
+    global_verbose, _ = pre.parse_known_args(scan_argv)
+    _configure_logging(max(args.verbose, global_verbose.verbose))
     config = load_config(args.config)
     return args.func(args, config)
