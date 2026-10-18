@@ -211,23 +211,63 @@ class Config:
     stations: list[Station] = field(default_factory=list)
 
 
+def _parse_dotenv(path: Path) -> dict[str, str]:
+    """Parse a simple ``.env`` file into a dict (stdlib only).
+
+    Supports ``KEY=value`` lines, ``#`` comments, blank lines, an optional
+    ``export`` prefix, and surrounding single/double quotes on the value. Not a
+    full shell parser — no interpolation or multiline values. Returns an empty
+    dict when the file is absent or unreadable.
+    """
+    result: dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return result
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :]
+        key, sep, value = line.partition("=")
+        if not sep:
+            continue
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if key:
+            result[key] = value
+    return result
+
+
 def load_config(
     path: str | Path | None = None,
     env: Mapping[str, str] | None = None,
+    dotenv_path: str | Path | None = None,
 ) -> Config:
     """Load configuration from TOML plus environment secrets.
 
     Args:
         path: Path to a TOML config file. Defaults to ``config.toml``. A missing
             file yields a :class:`Config` with all defaults (no error).
-        env: Mapping used for secret lookups. Defaults to :data:`os.environ`;
-            injectable for tests.
+        env: Mapping used for secret lookups. Defaults to :data:`os.environ`
+            layered over a ``.env`` file (real env vars take precedence);
+            injectable for tests, in which case no ``.env`` is read.
+        dotenv_path: Path to a ``.env`` file. Defaults to ``.env`` in the
+            current directory. Only consulted when ``env`` is not injected.
 
     Returns:
         A populated :class:`Config`.
     """
     if env is None:
-        env = os.environ
+        # Layer a .env file UNDER the real environment so an actually-exported
+        # variable always wins, but values present only in .env are picked up.
+        dotenv_file = Path(dotenv_path) if dotenv_path is not None else Path(".env")
+        merged = _parse_dotenv(dotenv_file)
+        merged.update(os.environ)
+        env = merged
 
     config_path = Path(path) if path is not None else Path(DEFAULT_CONFIG_PATH)
 

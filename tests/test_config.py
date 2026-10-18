@@ -297,3 +297,28 @@ telegram_token = "also-ignored"
     config = load_config(toml, env={})
     assert config.telegram_token is None
     assert config.chat_id is None
+
+
+def test_dotenv_file_populates_secrets(tmp_path: Path) -> None:
+    """Secrets present only in a .env file are loaded when env is not injected."""
+    missing_toml = tmp_path / "nope.toml"
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "HOTLINE_TELEGRAM_TOKEN=tok123\n"
+        'HOTLINE_CHAT_ID="555"\n'
+        "# a comment line\n"
+        "export HOTLINE_SUMMARY_API_KEY=apikey\n",
+        encoding="utf-8",
+    )
+    config = load_config(missing_toml, dotenv_path=dotenv)
+    assert config.telegram_token == "tok123"
+    assert config.chat_id == "555"
+    assert config.summary_api_key == "apikey"
+
+
+def test_injected_env_ignores_dotenv(tmp_path: Path) -> None:
+    """An injected env mapping bypasses .env entirely (test isolation)."""
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("HOTLINE_TELEGRAM_TOKEN=fromfile\n", encoding="utf-8")
+    config = load_config(tmp_path / "nope.toml", env={}, dotenv_path=dotenv)
+    assert config.telegram_token is None
