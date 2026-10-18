@@ -1,0 +1,41 @@
+# hotline configuration (example)
+#
+# Copy this file to `config.toml` and edit it, then run:
+#   uv run python -m hotline watch --config config.toml
+#
+# This file holds NON-SECRET settings only. Secrets (Telegram bot token, chat
+# id, and the optional social tokens) are read exclusively from environment
+# variables -- see .env.example. Never put secrets in this file.
+#
+# Offline demo: you do not need a config at all to try hotline. With no
+# reachable config, `uv run python -m hotline once --dry-run` reads the bundled
+# fixtures/ pages and prints detections.
+
+[source]
+# Public 987FM contest / giveaway pages to poll. Replace these with the real
+# pages you are permitted to monitor, and always respect the site's robots.txt
+# and Terms of Service (hotline checks robots.txt before fetching).
+contest_urls = [
+  # "https://www.melisten.sg/radio/987",
+  # "https://www.mediacorp.sg/987fm/contests",
+]
+
+# Optional public feed (RSS/Atom/JSON) to poll alongside the pages.
+# feed_url = "https://example.com/987fm/feed.xml"
+
+# Polite, identifiable User-Agent sent on every HTTP request. Include a way to
+# contact you so site owners can reach out instead of simply blocking you.
+user_agent = "hotline/0.1 (+https://github.com/lgf2111/radio-giveaway-notifier)"
+
+[poll]
+# Seconds between polls in `watch` mode. Keep this reasonable (default 45s) to
+# avoid hammering the source. Back off further if you see errors.
+interval = 45
+
+[audio]
+# The audio source is optional and OFF by default. It pulls the live mp3 stream
+# and transcribes 10-second windows locally with faster-whisper (install the
+# `audio` extra). Only enable this if you have the right to capture and
+# transcribe the stream -- see the LEGAL / ToS / ETHICS section in the README.
+enabled = false
+# stream_url = "https://example.com/987fm.mp3"
