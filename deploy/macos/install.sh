@@ -83,6 +83,7 @@ trap 'rm -f "${tmp_plist}"' EXIT
 sed \
     -e "s#__INSTALL_DIR__#${INSTALL_DIR}#g" \
     -e "s#__USER__#${USER_NAME}#g" \
+    -e "s#__HOME__#${HOME}#g" \
     "${PLIST_SRC}" > "${tmp_plist}"
 cp "${tmp_plist}" "${PLIST_DEST}"
 echo "==> installed ${PLIST_DEST}"

@@ -86,8 +86,11 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument(
         "--interval",
         type=int,
-        default=45,
-        help="Seconds between polls (default: 45).",
+        default=None,
+        help=(
+            "Seconds between polls. Overrides the config's [poll] interval; "
+            "when neither is set, defaults to 45."
+        ),
     )
     watch.set_defaults(func=cmd_watch)
 
@@ -554,7 +557,7 @@ def cmd_watch(args: argparse.Namespace, config: Config) -> int:
     A plain ``--dry-run`` keeps dedupe state in an in-memory store so no
     on-disk database is written; passing ``--db PATH`` uses that path instead.
     """
-    interval = args.interval
+    interval = args.interval if args.interval is not None else config.poll_interval
     store = _store_for(args)
     print(f"Watching every {interval}s (Ctrl-C to stop).")
     try:
