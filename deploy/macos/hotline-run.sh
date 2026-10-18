@@ -33,7 +33,9 @@ else
 fi
 
 # Run the watcher. --project pins uv to the install dir regardless of cwd.
-exec uv run --project "${INSTALL_DIR}" python -m hotline watch \
+# --extra audio installs faster-whisper so the live transcription path works;
+# without it the audio source degrades to a no-op (text/web alerts only).
+exec uv run --project "${INSTALL_DIR}" --extra audio python -m hotline watch \
     --config "${CONFIG_PATH}" \
     --db "${DB_PATH}"
 
@@ -41,5 +43,5 @@ exec uv run --project "${INSTALL_DIR}" python -m hotline watch \
 # command in caffeinate. Comment out the exec above and uncomment the line
 # below. Do NOT also disable sleep globally -- caffeinate -i is scoped to this
 # process only. See the README "Keeping the watcher alive" section.
-# exec caffeinate -i uv run --project "${INSTALL_DIR}" python -m hotline watch \
-#     --config "${CONFIG_PATH}" --db "${DB_PATH}"
+# exec caffeinate -i uv run --project "${INSTALL_DIR}" --extra audio \
+#     python -m hotline watch --config "${CONFIG_PATH}" --db "${DB_PATH}"
