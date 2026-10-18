@@ -45,9 +45,11 @@ def _default_capture(stream_url: str, seconds: int, out_path: str) -> Path | Non
 def handle_audio_trigger(
     config: Config,
     *,
+    language: str | None = None,
+    stream_url: str | None = None,
     capture: Capture = _default_capture,
     classify: Classify = classify_clip,
-    transcribe: Transcribe = transcribe_clip,
+    transcribe: Transcribe | None = None,
     now: Callable[[], datetime] = datetime.now,
 ) -> tuple[str, Path | None]:
     """Capture a clip from the configured stream and transcribe it.
@@ -64,12 +66,20 @@ def handle_audio_trigger(
     Args:
         config: Runtime configuration supplying ``audio_stream_url``,
             ``audio_clip_seconds``, and the ``audio_gate_*`` settings.
+        language: Whisper language hint forwarded to the default transcriber
+            (e.g. ``"en"``, ``"zh"``). ``None`` lets Whisper auto-detect. Only
+            applied on the default :func:`transcribe_clip` path; an injected
+            ``transcribe`` callable is called unchanged as ``(path) -> str``.
+        stream_url: Per-station stream URL override. When provided it is
+            captured instead of ``config.audio_stream_url``.
         capture: Injectable capture callable
             ``(stream_url, seconds, out_path) -> Path | None``. Returns ``None``
             when ffmpeg is unavailable or capture fails.
         classify: Injectable music-vs-speech gate ``(audio_path) -> Classification``.
             Consulted only when ``config.audio_gate_enabled`` is true.
-        transcribe: Injectable transcriber ``(audio_path) -> str``.
+        transcribe: Injectable transcriber ``(audio_path) -> str``. When
+            ``None`` (the default) the real :func:`transcribe_clip` runs with
+            the ``language`` hint; an injected callable is used as-is.
         now: Injectable clock used to name the working clip file uniquely.
 
     Returns:
@@ -77,7 +87,7 @@ def handle_audio_trigger(
         (ffmpeg/whisper missing or capture failure) returns ``("", None)``. When
         the gate skips confident music returns ``("", clip_path)``.
     """
-    stream_url = config.audio_stream_url
+    stream_url = stream_url or config.audio_stream_url
     if not stream_url:
         logger.info("pipeline: no audio_stream_url configured; skipping audio trigger")
         return "", None
@@ -107,5 +117,10 @@ def handle_audio_trigger(
             )
             return "", clip_path
 
-    transcript = transcribe(clip_path)
+    if transcribe is None:
+        # Default path: forward the language hint to the real transcriber.
+        transcript = transcribe_clip(clip_path, language=language)
+    else:
+        # Injected transcriber stays (path) -> str and is called unchanged.
+        transcript = transcribe(clip_path)
     return transcript, clip_path

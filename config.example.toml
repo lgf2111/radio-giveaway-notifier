@@ -5,32 +5,126 @@
 #
 # This file holds NON-SECRET settings only. Secrets (Telegram bot token, chat
 # id, and the optional social tokens) are read exclusively from environment
-# variables -- see .env.example. Never put secrets in this file.
+# variables -- see .env.example. Never put secrets in this file (including in
+# any [[station]] table).
 #
 # Offline demo: you do not need a config at all to try hotline. With no
 # reachable config, `uv run python -m hotline once --dry-run` reads the bundled
-# fixtures/ pages and prints detections.
+# fixtures/ pages and prints detections. With no config at all the watcher also
+# defaults to the 8 Singapore stations defined in hotline/config.py.
 
-[source]
-# Public 987FM contest / giveaway pages to poll. Always respect the site's
-# robots.txt and Terms of Service (hotline checks robots.txt before fetching).
-# The 987FM station landing page is server-rendered and robots-allowed.
-contest_urls = [
-  "https://www.melisten.sg/radio/987",
-]
+# ---------------------------------------------------------------------------
+# Stations ([[station]] array-of-tables)
+# ---------------------------------------------------------------------------
+# Each [[station]] block is one station to watch. Add/remove blocks freely and
+# restrict a run with `--station SLUG` (repeatable). Fields:
+#   name          human-readable station name (shown in alerts)
+#   slug          short id for --station + dedupe (derived from name if omitted)
+#   language      detection/transcription hint: "en", "zh", or "bilingual"
+#   stream_url    live audio stream (leave "" when you have no verified stream)
+#   audio_enabled whether the audio pipeline may run for this station
+#   contest_urls  public contest/giveaway web pages to poll
+#   sitemap_url   optional sitemap to discover giveaway pages
+#   feed_url      optional RSS/Atom/JSON feed to poll
+#
+# The FIRST station's source/stream fields are also mirrored into the global
+# single-station settings, so the audio pipeline keeps working unchanged.
+#
+# Only enable audio for a stream you are explicitly permitted to capture -- see
+# the LEGAL / ToS / ETHICS section in the README. Always respect each site's
+# robots.txt (hotline checks it before fetching).
 
-# Sitemap discovery: hotline fetches this sitemap, keeps <loc> entries under
-# /radio/987/ whose slug matches giveaway|contest|win|prize|promo, and polls
-# those pages. The melisten sitemap is robots-allowed. See the README
+# --- Mediacorp: verified streamtheworld AAC+ streams (HTTP 200) ---
+
+[[station]]
+name = "CLASS 95"
+slug = "class95"
+language = "en"
+stream_url = "https://22903.live.streamtheworld.com/CLASS95_PREM.aac"
+audio_enabled = true
+
+[[station]]
+name = "987FM"
+slug = "987fm"
+language = "en"
+stream_url = "https://22903.live.streamtheworld.com/987FM_PREM.aac"
+audio_enabled = true
+# The 987FM station landing page is server-rendered and robots-allowed. The
+# melisten sitemap lists /radio/987/ giveaway pages; see the README
 # "Target: 987FM" section for the research behind these defaults.
+contest_urls = ["https://www.melisten.sg/radio/987"]
 sitemap_url = "https://www.melisten.sg/sitemap.xml"
 
-# Optional public feed (RSS/Atom/JSON) to poll alongside the pages.
-# feed_url = "https://example.com/987fm/feed.xml"
+[[station]]
+name = "GOLD 905"
+slug = "gold905"
+language = "en"
+stream_url = "https://22903.live.streamtheworld.com/GOLD905_PREM.aac"
+audio_enabled = true
 
+[[station]]
+name = "YES 933"
+slug = "yes933"
+language = "zh"
+stream_url = "https://22903.live.streamtheworld.com/YES933_PREM.aac"
+audio_enabled = true
+
+# --- User-supplied streams: fill in stream_url to enable audio ---
+# To obtain a stream URL open the station's web player in a browser, then use
+# DevTools > Network and filter for media/aac (look for a .aac/.mp3 request).
+# Paste it below and set audio_enabled = true. Confirm you are permitted to
+# capture it first.
+
+[[station]]
+name = "Kiss92"
+slug = "kiss92"
+language = "en"
+stream_url = ""
+audio_enabled = false
+
+[[station]]
+name = "ONE FM 91.3"
+slug = "onefm"
+language = "en"
+stream_url = ""
+audio_enabled = false
+
+[[station]]
+name = "LOVE 972"
+slug = "love972"
+language = "zh"
+stream_url = ""
+audio_enabled = false
+
+[[station]]
+name = "88.3JIA"
+slug = "jia883"
+language = "bilingual"
+stream_url = ""
+audio_enabled = false
+
+# ---------------------------------------------------------------------------
+# Legacy single-station format (still supported)
+# ---------------------------------------------------------------------------
+# Instead of [[station]] tables you may use the original flat [source]/[audio]
+# tables below; they synthesize exactly one 987FM station. If both are present,
+# [[station]] wins. Example:
+#
+#   [source]
+#   contest_urls = ["https://www.melisten.sg/radio/987"]
+#   sitemap_url = "https://www.melisten.sg/sitemap.xml"
+#
+#   [audio]
+#   enabled = true
+#   stream_url = "https://22903.live.streamtheworld.com/987FM_PREM.aac"
+
+[source]
 # Polite, identifiable User-Agent sent on every HTTP request. Include a way to
 # contact you so site owners can reach out instead of simply blocking you.
 user_agent = "hotline/0.1 (+https://github.com/lgf2111/radio-giveaway-notifier)"
+
+# Optional public feed (RSS/Atom/JSON) to poll alongside the pages.
+# feed_url = "https://example.com/987fm/feed.xml"
 
 [poll]
 # Seconds between polls in `watch` mode. Keep this reasonable (default 45s) to
@@ -38,19 +132,15 @@ user_agent = "hotline/0.1 (+https://github.com/lgf2111/radio-giveaway-notifier)"
 interval = 45
 
 [audio]
-# The audio source is optional and OFF by default. It pulls the live mp3 stream
-# and transcribes 10-second windows locally with faster-whisper (install the
-# `audio` extra). Only enable this if you have the right to capture and
-# transcribe the stream -- see the LEGAL / ToS / ETHICS section in the README.
+# The audio pipeline is optional and GLOBAL. Per-station stream_url lives on the
+# [[station]] blocks above; these keys tune how transcription runs for all
+# stations. Only enable audio for streams you are permitted to capture -- see
+# the LEGAL / ToS / ETHICS section in the README. Requires the `audio` extra.
 #
 # WARNING: melisten's robots.txt disallows /api/, /liveradio/, /user/, /login.
-# Do NOT point stream_url at https://live.melisten.sg/liveradio/987 -- that path
-# is robots-disallowed. Use only a stream you are explicitly permitted to
-# capture.
-enabled = false
-# Verified live 987FM audio stream (streamtheworld AAC+, HTTP 200). This host is
-# allowed and is NOT the robots-disallowed melisten.sg /liveradio/ path.
-stream_url = "https://22903.live.streamtheworld.com/987FM_PREM.aac"
+# Do NOT point any station stream_url at https://live.melisten.sg/liveradio/987
+# -- that path is robots-disallowed. Use only a stream you are permitted to use.
+#
 # How the audio source runs: "event" captures and transcribes a clip only when
 # a web/sitemap detection fires (lightweight). Other modes may sample on an
 # interval.

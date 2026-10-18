@@ -24,6 +24,71 @@ def fixtures_dir() -> Path:
 
 
 @pytest.fixture
+def make_station():
+    """Return a factory building a :class:`~hotline.config.Station`.
+
+    Sensible defaults (``language="en"``, no stream) keep call sites short; any
+    field can be overridden by keyword.
+    """
+    from hotline.config import Station
+
+    def _factory(
+        name: str = "987FM",
+        slug: str = "987fm",
+        language: str = "en",
+        stream_url: str | None = None,
+        contest_urls: list[str] | None = None,
+        sitemap_url: str | None = None,
+        feed_url: str | None = None,
+        audio_enabled: bool = False,
+    ) -> Station:
+        return Station(
+            name=name,
+            slug=slug,
+            language=language,
+            stream_url=stream_url,
+            contest_urls=list(contest_urls or []),
+            sitemap_url=sitemap_url,
+            feed_url=feed_url,
+            audio_enabled=audio_enabled,
+        )
+
+    return _factory
+
+
+@pytest.fixture
+def make_multi_station_config(make_station):
+    """Return a factory building a multi-station :class:`~hotline.config.Config`.
+
+    Takes an iterable of :class:`~hotline.config.Station` (or none, in which
+    case two fake stations are created) plus any flat ``Config`` overrides, and
+    mirrors the first station's targeting into the flat fields the way
+    ``load_config`` does.
+    """
+    from hotline.config import Config, Station
+
+    def _factory(stations: list[Station] | None = None, **overrides) -> Config:
+        if stations is None:
+            stations = [
+                make_station(name="Station A", slug="a", contest_urls=["https://a.test/win"]),
+                make_station(name="Station B", slug="b", contest_urls=["https://b.test/win"]),
+            ]
+        first = stations[0]
+        base = dict(
+            contest_urls=list(first.contest_urls),
+            feed_url=first.feed_url,
+            sitemap_url=first.sitemap_url,
+            audio_stream_url=first.stream_url,
+            audio_enabled=first.audio_enabled,
+            stations=list(stations),
+        )
+        base.update(overrides)
+        return Config(**base)
+
+    return _factory
+
+
+@pytest.fixture
 def read_fixture():
     """Return a reader that loads a fixture file's text by name."""
 

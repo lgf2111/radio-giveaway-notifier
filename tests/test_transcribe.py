@@ -19,3 +19,31 @@ def test_transcribe_clip_returns_empty_on_missing_dependency(monkeypatch) -> Non
     # raise ImportError, which must degrade to "".
     monkeypatch.setitem(sys.modules, "faster_whisper", None)
     assert transcribe_clip("/tmp/clip.ogg") == ""
+
+
+def test_transcribe_clip_forwards_language_to_whisper(monkeypatch) -> None:
+    """The real path forwards ``language`` to ``WhisperModel.transcribe``."""
+    import types
+
+    recorded: dict[str, object] = {}
+
+    class _Segment:
+        text = "ni hao"
+
+    class _FakeModel:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def transcribe(self, path, language=None):
+            recorded["path"] = path
+            recorded["language"] = language
+            return [_Segment()], object()
+
+    fake_module = types.ModuleType("faster_whisper")
+    fake_module.WhisperModel = _FakeModel
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
+
+    text = transcribe_clip("/tmp/clip.ogg", language="zh")
+    assert text == "ni hao"
+    assert recorded["path"] == "/tmp/clip.ogg"
+    assert recorded["language"] == "zh"

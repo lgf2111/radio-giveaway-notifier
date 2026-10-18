@@ -36,6 +36,7 @@ def transcribe_clip(
     *,
     model_size: str = "base",
     compute_type: str = "int8",
+    language: str | None = None,
     transcriber: ClipTranscriber | None = None,
 ) -> str:
     """Transcribe an audio *file* into text.
@@ -46,8 +47,12 @@ def transcribe_clip(
             no ``transcriber`` is injected.
         compute_type: faster-whisper compute type (e.g. ``"int8"``). Used only
             when no ``transcriber`` is injected.
+        language: Whisper language hint (e.g. ``"en"``, ``"zh"``). ``None``
+            lets Whisper auto-detect the language. Used only when no
+            ``transcriber`` is injected.
         transcriber: Callable ``(path) -> transcript``. When provided it is used
-            directly; otherwise a real faster-whisper model is built lazily.
+            directly (unchanged); otherwise a real faster-whisper model is built
+            lazily.
 
     Returns:
         The transcript text, or ``""`` (after logging once) when
@@ -66,7 +71,7 @@ def transcribe_clip(
         return ""
 
     model = WhisperModel(model_size, device="cpu", compute_type=compute_type)
-    segments, _info = model.transcribe(str(audio_path))
+    segments, _info = model.transcribe(str(audio_path), language=language)
     return " ".join(segment.text for segment in segments).strip()
 
 

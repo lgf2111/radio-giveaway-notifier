@@ -135,6 +135,92 @@ def test_end_to_end_fires_one_rich_alert_and_dedupes(
     store.close()
 
 
+def test_handle_audio_trigger_honors_stream_url_override(
+    fake_clip_transcriber, fake_classifier, tmp_path
+) -> None:
+    config = _config()
+    clip = tmp_path / "clip.ogg"
+    clip.write_bytes(b"stub")
+    seen: dict[str, object] = {}
+
+    def capture(stream_url: str, seconds: int, out_path: str) -> Path:
+        seen["stream_url"] = stream_url
+        return clip
+
+    classify = fake_classifier(is_speech=True)
+    transcribe = fake_clip_transcriber("call now to win tickets")
+
+    override = "https://22903.live.streamtheworld.com/YES933_PREM.aac"
+    transcript, clip_path = handle_audio_trigger(
+        config,
+        stream_url=override,
+        capture=capture,
+        classify=classify,
+        transcribe=transcribe,
+    )
+
+    # The per-station override wins over config.audio_stream_url.
+    assert seen["stream_url"] == override
+    assert transcript == "call now to win tickets"
+    assert clip_path == clip
+
+
+def test_handle_audio_trigger_forwards_language_to_default_transcriber(
+    fake_classifier, monkeypatch, tmp_path
+) -> None:
+    import hotline.pipeline as pipeline
+
+    config = _config()
+    clip = tmp_path / "clip.ogg"
+    clip.write_bytes(b"stub")
+
+    recorded: dict[str, object] = {}
+
+    def fake_transcribe_clip(path, *, language=None):
+        recorded["path"] = path
+        recorded["language"] = language
+        return "ni hao da dian hua"
+
+    # Patch the module-level default transcriber the None-path resolves to.
+    monkeypatch.setattr(pipeline, "transcribe_clip", fake_transcribe_clip)
+
+    def capture(stream_url: str, seconds: int, out_path: str) -> Path:
+        return clip
+
+    classify = fake_classifier(is_speech=True)
+
+    # transcribe left as None => default path => language is forwarded.
+    transcript, clip_path = handle_audio_trigger(
+        config, language="zh", capture=capture, classify=classify
+    )
+
+    assert transcript == "ni hao da dian hua"
+    assert recorded["path"] == clip
+    assert recorded["language"] == "zh"
+
+
+def test_injected_transcriber_is_called_without_language(
+    fake_clip_transcriber, fake_classifier, tmp_path
+) -> None:
+    config = _config()
+    clip = tmp_path / "clip.ogg"
+    clip.write_bytes(b"stub")
+
+    def capture(stream_url: str, seconds: int, out_path: str) -> Path:
+        return clip
+
+    classify = fake_classifier(is_speech=True)
+    transcribe = fake_clip_transcriber("call now to win tickets")
+
+    # An injected (path)->str transcriber is used unchanged even with a language.
+    transcript, _ = handle_audio_trigger(
+        config, language="zh", capture=capture, classify=classify, transcribe=transcribe
+    )
+
+    assert transcript == "call now to win tickets"
+    assert transcribe.calls == [clip]
+
+
 def _clip(tmp_path) -> Path:
     clip = tmp_path / "clip.ogg"
     clip.write_bytes(b"stub")

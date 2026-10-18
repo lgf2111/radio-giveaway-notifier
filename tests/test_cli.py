@@ -9,6 +9,8 @@ from __future__ import annotations
 import pytest
 
 from hotline import cli
+from hotline.sources import Item
+from hotline.store import Store, item_hash
 
 
 def test_once_dry_run_prints_detections(capsys, monkeypatch, tmp_path):
@@ -114,6 +116,103 @@ def test_once_dry_run_no_db_is_repeatable(capsys, monkeypatch, tmp_path):
 
     assert first.count("Giveaway alert") >= 3
     assert second.count("Giveaway alert") >= 3
+
+
+def _args(argv):
+    """Parse ``argv`` into the CLI namespace without dispatching."""
+    return cli.build_parser().parse_args(argv)
+
+
+def test_iter_items_polls_every_station_and_tags(
+    make_multi_station_config, make_station, monkeypatch
+):
+    """Both stations are polled and their items carry the station tag."""
+    station_a = make_station(name="Station A", slug="a", contest_urls=["https://a.test/win"])
+    station_b = make_station(name="Station B", slug="b", contest_urls=["https://b.test/win"])
+    config = make_multi_station_config([station_a, station_b])
+
+    polled = []
+
+    def fake_poll_web(station_config):
+        url = station_config.contest_urls[0]
+        polled.append(url)
+        yield Item(
+            title="Win tickets",
+            url=url,
+            text="call now to win tickets",
+            published=None,
+            source="web",
+        )
+
+    monkeypatch.setattr(cli, "poll_web", fake_poll_web)
+    items = list(cli._iter_items(config, ("web",), config.stations))
+
+    # Both stations' contest URLs were polled.
+    assert polled == ["https://a.test/win", "https://b.test/win"]
+    assert len(items) == 2
+    # Items are tagged so the station appears in title and URL.
+    assert items[0].title.startswith("[Station A]")
+    assert "station=a" in items[0].url
+    assert items[1].title.startswith("[Station B]")
+    assert "station=b" in items[1].url
+
+
+def test_dedupe_distinguishes_identical_text_across_stations(
+    make_multi_station_config, make_station, monkeypatch
+):
+    """Two stations surfacing identical contest text dedupe independently."""
+    station_a = make_station(name="Station A", slug="a", contest_urls=["https://a.test/win"])
+    station_b = make_station(name="Station B", slug="b", contest_urls=["https://b.test/win"])
+    config = make_multi_station_config([station_a, station_b])
+
+    def fake_poll_web(station_config):
+        # Identical title/url/text for both stations: only the per-station tag
+        # applied by _iter_items can make them dedupe distinctly.
+        yield Item(
+            title="Win",
+            url="https://shared.test/win",
+            text="call now to win tickets",
+            published=None,
+            source="web",
+        )
+
+    monkeypatch.setattr(cli, "poll_web", fake_poll_web)
+    items = list(cli._iter_items(config, ("web",), config.stations))
+    assert len(items) == 2
+    assert item_hash(items[0]) != item_hash(items[1])
+
+
+def test_station_filter_restricts(make_multi_station_config, make_station):
+    """``--station`` restricts polling to the named station(s)."""
+    station_a = make_station(name="Station A", slug="a", contest_urls=["https://a.test/win"])
+    station_b = make_station(name="Station B", slug="b", contest_urls=["https://b.test/win"])
+    config = make_multi_station_config([station_a, station_b])
+
+    selected = cli._selected_stations(_args(["once", "--station", "b"]), config)
+    assert [s.slug for s in selected] == ["b"]
+
+    both = cli._selected_stations(_args(["once"]), config)
+    assert [s.slug for s in both] == ["a", "b"]
+
+
+def test_station_without_stream_skips_audio(make_multi_station_config, make_station):
+    """A station with no stream (audio disabled) skips audio without error."""
+    silent = make_station(name="LOVE 972", slug="love972", stream_url=None, audio_enabled=False)
+    config = make_multi_station_config([silent], telegram_token="tok", chat_id="chat")
+    store = Store(":memory:")
+    args = _args(["once", "--audio"])
+
+    # web_fired=True so the audio path would run if the station allowed it.
+    fired = cli._run_audio(args, config, store, silent, web_fired=True)
+    assert fired == 0
+    store.close()
+
+
+def test_lang_for_maps_languages(make_station):
+    assert cli.lang_for(make_station(language="en")) == "en"
+    assert cli.lang_for(make_station(language="zh")) == "zh"
+    assert cli.lang_for(make_station(language="bilingual")) is None
+    assert cli.lang_for(make_station(language="xx")) is None
 
 
 def test_unknown_subcommand_returns_nonzero():

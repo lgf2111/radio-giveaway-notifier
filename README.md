@@ -1,13 +1,19 @@
 # hotline
 
-A stdlib-first Python 3.13 CLI that watches **987FM** (Mediacorp, Singapore)
-for radio giveaways and pushes a **Telegram** alert within seconds. It catches
-"call now / text in" contest segments, dedupes them, and notifies once.
+A stdlib-first Python 3.13 CLI that watches **Singapore radio stations**
+(987FM and seven other mainly-English/Chinese stations) for radio giveaways and
+pushes a **Telegram** alert within seconds. It catches "call now / text in"
+(and Mandarin "现在打电话") contest segments, dedupes them per station, and
+notifies once.
 
+- **Stations:** watches 8 stations by default (see [Stations](#stations)); use
+  `--station SLUG` to restrict a run to specific stations.
 - **Sources:** public contest/giveaway web pages (+ optional feed), optional
   public X / Instagram endpoints (only when tokens are set), and an optional
-  feature-flagged audio source that transcribes the live stream locally.
-- **Detection:** an explicit phrase + keyword ruleset with negation handling.
+  feature-flagged audio source that transcribes each station's live stream
+  locally.
+- **Detection:** an explicit bilingual (English + Mandarin Chinese) phrase +
+  keyword ruleset with negation handling.
 - **Dedupe:** SQLite with a 7-day TTL so the same contest never alerts twice.
 - **Stdlib-first:** `urllib`, `sqlite3`, `tomllib`, `html.parser`. The only
   optional third-party dependency is `faster-whisper` for audio.
@@ -54,10 +60,82 @@ pip install -e ".[audio]"   # or ".[dev]" for tooling without audio
 python -m hotline once --dry-run
 ```
 
+## Stations
+
+hotline watches these 8 mainly-English/Chinese Singapore stations by default
+(from `DEFAULT_STATIONS` in `hotline/config.py`). The four Mediacorp stations
+ship with a **verified** streamtheworld AAC+ stream; the other four have **no
+stream yet** — you must supply one yourself (see below) before their audio path
+can run.
+
+| Station     | Slug      | Language   | Stream                         |
+|-------------|-----------|------------|--------------------------------|
+| CLASS 95    | `class95` | English    | verified (streamtheworld)      |
+| 987FM       | `987fm`   | English    | verified (streamtheworld)      |
+| GOLD 905    | `gold905` | English    | verified (streamtheworld)      |
+| YES 933     | `yes933`  | Chinese    | verified (streamtheworld)      |
+| Kiss92      | `kiss92`  | English    | user-supplied                  |
+| ONE FM 91.3 | `onefm`   | English    | user-supplied                  |
+| LOVE 972    | `love972` | Chinese    | user-supplied                  |
+| 88.3JIA     | `jia883`  | bilingual  | user-supplied                  |
+
+Only **987FM** ships with a melisten contest page + sitemap by default; add
+`contest_urls`/`sitemap_url` to the other stations as you research them.
+
+### Supplying the 4 missing streams
+
+The four `user-supplied` stations need a stream URL before their audio pipeline
+can run. To find one: open the station's web player in a browser, open
+**DevTools → Network**, filter for **media/aac** (look for a `.aac`/`.mp3`
+request), copy that URL into the station's `stream_url`, and set
+`audio_enabled = true`. Only do this for a stream you are permitted to capture
+(see [LEGAL / ToS / ETHICS](#️-legal--tos--ethics)) — the same terms apply to
+**every** station's stream, not just 987FM.
+
+### Station config formats
+
+Two TOML formats are supported (and a no-config run uses the 8 defaults above):
+
+- **Multi-station (`[[station]]` array-of-tables).** One block per station —
+  `name`, optional `slug` (derived from `name` when absent), `language`
+  (`"en"`/`"zh"`/`"bilingual"`), `stream_url`, `audio_enabled`, and optional
+  `contest_urls`/`sitemap_url`/`feed_url`. See `config.example.toml` for all 8.
+  The first station's source/stream fields are mirrored into the global
+  single-station settings so the audio pipeline keeps working unchanged.
+- **Legacy single-station (`[source]`/`[audio]`).** The original flat format
+  still parses and synthesizes exactly one `987FM` station. If both formats are
+  present, `[[station]]` wins.
+
+The `[poll]`/`[audio]`/`[summary]` tables are always global; only `stream_url`
+lives per station in the multi-station format.
+
+### Restricting stations: `--station`
+
+By default every configured station is polled. Restrict a run with one or more
+`--station SLUG` flags (repeatable):
+
+```bash
+# Only 987FM:
+uv run python -m hotline once --station 987fm --config config.toml
+
+# 987FM and the Chinese YES 933:
+uv run python -m hotline watch --station 987fm --station yes933 --config config.toml
+```
+
+### Chinese detection and transcription
+
+Detection is bilingual: alongside the English phrases it matches Mandarin
+contest cues such as 现在打电话 ("call now"), 热线 ("hotline"), 赢 ("win"), and
+门票 ("tickets"), with Chinese negations (已结束, 结束了, 已截止, 不再)
+suppressing stale callouts. For the audio path, a station's `language` drives
+Whisper: `zh` transcribes in Chinese, `en` in English, and `bilingual` (or any
+unknown value) lets Whisper **auto-detect** the language.
+
 ## Configuration
 
 Non-secret settings live in a TOML file; secrets come only from environment
-variables (never from TOML, so they can't be committed with a config).
+variables (never from TOML, including in any `[[station]]` table, so they can't
+be committed with a config).
 
 1. Copy the examples:
 
@@ -94,8 +172,8 @@ and **ffmpeg** on `PATH`.
 
 | Key            | Default                                               | Meaning                                                               |
 |----------------|-------------------------------------------------------|-----------------------------------------------------------------------|
-| `enabled`      | `false`                                               | Master switch. `--audio` on the CLI force-enables it for one run.     |
-| `stream_url`   | `https://22903.live.streamtheworld.com/987FM_PREM.aac`| Verified live 987FM stream (streamtheworld AAC+, HTTP 200).           |
+| `enabled`      | `false`                                               | Legacy per-station master switch (multi-station: `audio_enabled` per `[[station]]`). `--audio` force-enables it for one run. |
+| `stream_url`   | *(per station)*                                       | In the multi-station format the stream lives on each `[[station]]`. Legacy: the verified 987FM streamtheworld URL. |
 | `mode`         | `event`                                               | `event` clips only when a web/sitemap detection fires; else `continuous`. |
 | `model_size`   | `base`                                                | faster-whisper model (`tiny`, `base`, `small`, …). `base` suits a free-tier CPU. |
 | `compute_type` | `int8`                                                | faster-whisper compute type. `int8` keeps CPU/memory low.             |
@@ -147,6 +225,9 @@ uv run python -m hotline once --dry-run
 
 # Restrict to specific sources (repeatable: web, sitemap, social, audio):
 uv run python -m hotline once --source web --source sitemap
+
+# Restrict to specific stations by slug (repeatable: 987fm, class95, yes933, …):
+uv run python -m hotline once --station 987fm --station yes933
 
 # Force the audio pipeline on for this run (even if [audio] enabled = false).
 # With --dry-run this demonstrates a rich alert fully OFFLINE from the bundled

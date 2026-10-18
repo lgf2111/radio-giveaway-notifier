@@ -23,10 +23,11 @@ from __future__ import annotations
 import argparse
 import time
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 from hotline import __version__
-from hotline.config import Config, load_config
+from hotline.config import Config, Station, load_config
 from hotline.detect import Detection, detect
 from hotline.notify import notify, notify_rich
 from hotline.pipeline import handle_audio_trigger
@@ -55,7 +56,10 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the top-level argument parser with all subcommands."""
     parser = argparse.ArgumentParser(
         prog="hotline",
-        description="Watch 987FM for radio giveaways and alert via Telegram.",
+        description=(
+            "Watch Singapore radio stations (987FM and friends) for giveaways "
+            "and alert via Telegram. Use --station SLUG to restrict."
+        ),
     )
     parser.add_argument("--version", action="version", version=f"hotline {__version__}")
 
@@ -103,6 +107,16 @@ def _add_common_flags(parser: argparse.ArgumentParser) -> None:
         dest="sources",
         help="Restrict to a source (repeatable). Default: all sources.",
     )
+    parser.add_argument(
+        "--station",
+        action="append",
+        dest="stations",
+        metavar="SLUG",
+        help=(
+            "Restrict to a station by slug (repeatable). Default: all "
+            "configured stations (e.g. 987fm, class95, yes933)."
+        ),
+    )
     parser.add_argument("--config", help="Path to a TOML config file.")
     parser.add_argument(
         "--audio",
@@ -147,12 +161,86 @@ def _selected_sources(args: argparse.Namespace) -> tuple[str, ...]:
     return tuple(args.sources) if args.sources else ALL_SOURCES
 
 
-def _iter_items(config: Config, sources: tuple[str, ...]) -> Iterator[Item]:
-    """Yield items from each selected live source."""
-    if "web" in sources:
-        yield from poll_web(config)
-    if "sitemap" in sources:
-        yield from poll_sitemap(config)
+#: Maps a station language to a Whisper language hint (``None`` auto-detects).
+_LANGUAGE_MAP = {"en": "en", "zh": "zh"}
+
+
+def lang_for(station: Station) -> str | None:
+    """Return the Whisper language hint for ``station``.
+
+    ``en`` -> ``"en"``, ``zh`` -> ``"zh"``; ``bilingual`` and any unknown value
+    map to ``None`` so Whisper auto-detects the language.
+    """
+    return _LANGUAGE_MAP.get(station.language)
+
+
+def _selected_stations(args: argparse.Namespace, config: Config) -> list[Station]:
+    """Return the stations to poll, filtered by the repeatable ``--station``.
+
+    Defaults to every configured station. A ``--station SLUG`` that matches no
+    configured station contributes nothing (the filter is a pure subset).
+    """
+    stations = list(config.stations)
+    wanted = getattr(args, "stations", None)
+    if not wanted:
+        return stations
+    wanted_set = set(wanted)
+    return [station for station in stations if station.slug in wanted_set]
+
+
+def _station_config(config: Config, station: Station) -> Config:
+    """Return a per-station view of ``config`` with the station's targets.
+
+    The global ``[poll]``/``[audio]``/``[summary]``/secret settings are kept;
+    only the source-targeting and per-station stream fields are overlaid so
+    :func:`poll_web`/:func:`poll_sitemap` poll this station's pages.
+    """
+    return replace(
+        config,
+        contest_urls=list(station.contest_urls),
+        feed_url=station.feed_url,
+        sitemap_url=station.sitemap_url,
+        audio_stream_url=station.stream_url,
+        audio_enabled=station.audio_enabled,
+    )
+
+
+def _tag_item(item: Item, station: Station) -> Item:
+    """Return ``item`` tagged with the station so dedupe distinguishes stations.
+
+    The station name is prefixed onto the title and the slug is appended to the
+    URL as a fragment, so two stations surfacing identical contest text hash to
+    distinct dedupe keys and the alert names the station.
+    """
+    separator = "&" if "#" in item.url else "#"
+    return Item(
+        title=f"[{station.name}] {item.title}",
+        url=f"{item.url}{separator}station={station.slug}",
+        text=item.text,
+        published=item.published,
+        source=item.source,
+    )
+
+
+def _iter_items(
+    config: Config, sources: tuple[str, ...], stations: list[Station]
+) -> Iterator[Item]:
+    """Yield items from each selected live source, per station.
+
+    Web and sitemap pages are polled per station (with items tagged by station
+    slug so dedupe treats identical text from two stations as distinct). The
+    social and audio-window sources remain global/no-op here; the event-driven
+    per-station audio path runs separately in :func:`_run_audio`.
+    """
+    for station in stations:
+        station_config = _station_config(config, station)
+        if "web" in sources:
+            for item in poll_web(station_config):
+                yield _tag_item(item, station)
+        if "sitemap" in sources:
+            for item in poll_sitemap(station_config):
+                yield _tag_item(item, station)
+
     if "social" in sources:
         yield from poll_social(config)
     if "audio" in sources:
@@ -192,18 +280,39 @@ def _config_has_live_targets(config: Config) -> bool:
     )
 
 
+#: Synthetic station backing the offline ``once --dry-run`` fixtures demo so the
+#: demo output (titles, '987FM' mention, audio headline) stays byte-identical.
+_DRY_RUN_STATION = Station(
+    name="987FM",
+    slug="987fm",
+    language="en",
+    stream_url="https://22903.live.streamtheworld.com/987FM_PREM.aac",
+    audio_enabled=True,
+)
+
+
 def _run_poll(args: argparse.Namespace, config: Config, store: Store) -> int:
-    """Run one polling pass over the selected sources.
+    """Run one polling pass over the selected sources and stations.
 
     Detects giveaway callouts, dedupes via the store, and notifies (or prints
     in dry-run). When the audio path is active it fires after the web/sitemap
     pass (event-driven on a fresh detection, or always in continuous mode).
     Returns the count of fresh detections notified.
+
+    The offline ``--dry-run`` fixtures fallback maps to a single synthetic
+    ``987FM`` station so its output is unchanged, and the audio trigger runs
+    once for that station.
     """
     sources = _selected_sources(args)
+    stations = _selected_stations(args, config)
 
     use_fixtures = args.dry_run and not _config_has_live_targets(config)
-    items = _iter_fixture_items(sources) if use_fixtures else _iter_items(config, sources)
+    if use_fixtures:
+        items = _iter_fixture_items(sources)
+        audio_stations = [_DRY_RUN_STATION]
+    else:
+        items = _iter_items(config, sources, stations)
+        audio_stations = stations
 
     notified = 0
     for item in items:
@@ -217,7 +326,8 @@ def _run_poll(args: argparse.Namespace, config: Config, store: Store) -> int:
         store.mark_notified(hash_)
         notified += 1
 
-    notified += _run_audio(args, config, store, web_fired=notified > 0)
+    for station in audio_stations:
+        notified += _run_audio(args, config, store, station, web_fired=notified > 0)
 
     return notified
 
@@ -227,14 +337,22 @@ def _audio_active(args: argparse.Namespace, config: Config) -> bool:
     return bool(getattr(args, "audio", False) or config.audio_enabled)
 
 
-def _run_audio(args: argparse.Namespace, config: Config, store: Store, *, web_fired: bool) -> int:
-    """Run the event-driven audio path for one poll pass.
+def _run_audio(
+    args: argparse.Namespace,
+    config: Config,
+    store: Store,
+    station: Station,
+    *,
+    web_fired: bool,
+) -> int:
+    """Run the event-driven audio path for one station in one poll pass.
 
     Fires when audio is active (``--audio`` or ``config.audio_enabled``) and
     either a web/sitemap detection fired this pass or ``audio_mode`` is
-    ``"continuous"``. In ``--dry-run`` the transcript and clip come from the
-    bundled fixtures so no ffmpeg or network is touched. Returns 1 if a fresh
-    audio detection was alerted, else 0.
+    ``"continuous"``. A station with no usable stream (``audio_enabled`` false
+    or an empty ``stream_url``) is skipped cleanly. In ``--dry-run`` the
+    transcript and clip come from the bundled fixtures so no ffmpeg or network
+    is touched. Returns 1 if a fresh audio detection was alerted, else 0.
     """
     if not _audio_active(args, config):
         return 0
@@ -245,7 +363,11 @@ def _run_audio(args: argparse.Namespace, config: Config, store: Store, *, web_fi
         transcript = (_FIXTURES_DIR / "callout_transcript.txt").read_text(encoding="utf-8")
         clip_path = _FIXTURES_DIR / "audio_clip.ogg"
     else:
-        transcript, clip = handle_audio_trigger(config)
+        if not (station.audio_enabled and station.stream_url):
+            return 0
+        transcript, clip = handle_audio_trigger(
+            config, stream_url=station.stream_url, language=lang_for(station)
+        )
         if not transcript or clip is None:
             return 0
         clip_path = clip
@@ -254,10 +376,12 @@ def _run_audio(args: argparse.Namespace, config: Config, store: Store, *, web_fi
     if detection is None:
         return 0
 
-    stream_url = config.audio_stream_url or "audio-stream"
+    stream_url = (station.stream_url if not args.dry_run else config.audio_stream_url) or (
+        config.audio_stream_url or "audio-stream"
+    )
     item = Item(
-        title="987FM on-air callout",
-        url=f"{stream_url}#audio",
+        title=f"{station.name} on-air callout",
+        url=f"{stream_url}#audio&station={station.slug}",
         text=transcript,
         published=None,
         source="audio",
