@@ -70,9 +70,68 @@ def transcribe_clip(
         )
         return ""
 
+    audio_input = _decode_to_pcm(audio_path)
+    if audio_input is None:
+        # ffmpeg/numpy unavailable: fall back to faster-whisper's own decoder
+        # (PyAV). Works when a PyAV build compatible with the installed
+        # faster-whisper is present; otherwise logs and returns "".
+        audio_input = str(audio_path)
+
     model = WhisperModel(model_size, device="cpu", compute_type=compute_type)
-    segments, _info = model.transcribe(str(audio_path), language=language)
+    try:
+        segments, _info = model.transcribe(audio_input, language=language)
+    except TypeError as exc:
+        # Known faster-whisper/PyAV incompatibility: av.open() dropped the
+        # metadata_errors kwarg in PyAV 13+. This only fires on the string-path
+        # fallback above; the PCM-array path avoids PyAV entirely.
+        logger.warning(
+            "audio: could not decode clip for transcription (%s). Ensure ffmpeg "
+            "is installed so clips are decoded without PyAV.",
+            exc,
+        )
+        return ""
     return " ".join(segment.text for segment in segments).strip()
+
+
+def _decode_to_pcm(audio_path: str | Path):
+    """Decode an audio file to a mono 16 kHz float32 numpy array via ffmpeg.
+
+    Returns the numpy array faster-whisper accepts directly, bypassing PyAV's
+    ``av.open()`` (whose API varies across versions). Returns ``None`` when
+    ffmpeg or numpy is unavailable, or on any decode failure, so the caller can
+    fall back to faster-whisper's built-in decoder.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("ffmpeg") is None:
+        return None
+    try:
+        import numpy as np
+    except ImportError:
+        return None
+
+    argv = [
+        "ffmpeg",
+        "-nostdin",
+        "-threads",
+        "1",
+        "-i",
+        str(audio_path),
+        "-f",
+        "f32le",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-",
+    ]
+    try:
+        proc = subprocess.run(argv, capture_output=True, check=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        logger.warning("audio: ffmpeg PCM decode failed (%s)", exc)
+        return None
+    return np.frombuffer(proc.stdout, dtype=np.float32).copy()
 
 
 def iter_windows(
