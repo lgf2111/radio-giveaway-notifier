@@ -13,13 +13,77 @@ source logs once and yields nothing instead of raising. Tests supply a fake
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
+from typing import Any
 
 from hotline.config import Config
 from hotline.sources import Item
 
 logger = logging.getLogger(__name__)
+
+#: Process-wide cache of built faster-whisper models, keyed by
+#: ``(model_size, compute_type)``. Building a ``WhisperModel`` loads weights
+#: from disk and (unless cached) checks the model revision over the network, so
+#: a long-running ``watch`` must reuse one instance across every clip instead of
+#: rebuilding per cycle. Guarded by ``_MODEL_LOCK`` because station captures run
+#: concurrently and may race to build the first model.
+_MODEL_CACHE: dict[tuple[str, str], Any] = {}
+_MODEL_LOCK = threading.Lock()
+
+
+def _get_whisper_model(model_size: str, compute_type: str) -> Any:
+    """Return a cached ``WhisperModel`` for the given size/compute type.
+
+    Builds the model once per ``(model_size, compute_type)`` and reuses it for
+    the life of the process. faster-whisper models are safe to call
+    concurrently for inference; only construction is serialised here.
+
+    The model is built once and reused, and once its files are cached on disk
+    it is loaded with ``local_files_only=True`` so neither construction nor
+    transcription makes a Hugging Face network request. On the very first run,
+    when the model is not yet downloaded, that offline load raises and we retry
+    once online to fetch it; every later process start is fully offline.
+    """
+    from faster_whisper import WhisperModel
+
+    key = (model_size, compute_type)
+    model = _MODEL_CACHE.get(key)
+    if model is not None:
+        return model
+    with _MODEL_LOCK:
+        model = _MODEL_CACHE.get(key)
+        if model is None:
+            logger.info(
+                "audio: loading faster-whisper model (size=%s, compute_type=%s); "
+                "cached for the life of the process",
+                model_size,
+                compute_type,
+            )
+            try:
+                # Prefer a fully offline load: no HF revision check per cycle.
+                model = WhisperModel(
+                    model_size,
+                    device="cpu",
+                    compute_type=compute_type,
+                    local_files_only=True,
+                )
+            except Exception as exc:  # noqa: BLE001 - first-run download fallback
+                logger.info(
+                    "audio: model not cached locally (%s); downloading once from "
+                    "Hugging Face, then future loads are offline",
+                    exc,
+                )
+                model = WhisperModel(
+                    model_size,
+                    device="cpu",
+                    compute_type=compute_type,
+                    local_files_only=False,
+                )
+            _MODEL_CACHE[key] = model
+        return model
+
 
 #: Default transcription window length in seconds.
 DEFAULT_WINDOW_SECONDS = 10
@@ -62,7 +126,7 @@ def transcribe_clip(
         return transcriber(str(audio_path))
 
     try:
-        from faster_whisper import WhisperModel
+        import faster_whisper  # noqa: F401  (availability probe)
     except ImportError:
         logger.warning(
             "audio: faster-whisper is not installed; cannot transcribe clip. "
@@ -77,7 +141,7 @@ def transcribe_clip(
         # faster-whisper is present; otherwise logs and returns "".
         audio_input = str(audio_path)
 
-    model = WhisperModel(model_size, device="cpu", compute_type=compute_type)
+    model = _get_whisper_model(model_size, compute_type)
     try:
         segments, _info = model.transcribe(audio_input, language=language)
     except TypeError as exc:

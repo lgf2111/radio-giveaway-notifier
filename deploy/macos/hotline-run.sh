@@ -41,6 +41,14 @@ fi
 # buffering (critical for monitoring a long-running background service).
 export PYTHONUNBUFFERED=1
 
+# Run Whisper fully offline. The faster-whisper model is downloaded once (on the
+# first run, or ahead of time) into the HF hub cache; after that, HF_HUB_OFFLINE
+# stops faster-whisper from issuing a model-revision check to huggingface.co on
+# every transcription. This removes a per-cycle network round-trip and keeps the
+# 24/7 watcher working through network blips. If you ever need to pull a new
+# model size, comment this out for one run so the download can happen.
+export HF_HUB_OFFLINE=1
+
 # Run the watcher. --project pins uv to the install dir regardless of cwd.
 # --extra audio installs faster-whisper so the live transcription path works;
 # without it the audio source degrades to a no-op (text/web alerts only).
