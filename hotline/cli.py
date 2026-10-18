@@ -99,7 +99,7 @@ def _add_common_flags(parser: argparse.ArgumentParser) -> None:
         action="append",
         choices=ALL_SOURCES,
         dest="sources",
-        help="Restrict to a source (repeatable). Default: all three.",
+        help="Restrict to a source (repeatable). Default: all sources.",
     )
     parser.add_argument("--config", help="Path to a TOML config file.")
     parser.add_argument(
