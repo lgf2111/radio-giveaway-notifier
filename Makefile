@@ -1,9 +1,14 @@
-.PHONY: install test lint fmt run lock clean
+.PHONY: install install-audio test lint fmt run lock clean
 
-# Create the venv and install core + dev + optional audio dependencies.
+# Create the venv and install core + dev dependencies (no audio/torch).
 install:
 	uv venv
-	uv sync --extra audio
+	uv sync --extra dev
+
+# Opt-in: also install the optional audio extra (pulls faster-whisper + torch).
+install-audio:
+	uv venv
+	uv sync --extra dev --extra audio
 
 # Run the full test suite.
 test:

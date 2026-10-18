@@ -82,3 +82,21 @@ def test_poll_web_skips_robots_disallowed(read_fixture, make_fetcher, make_robot
     assert [i.url for i in items] == [allowed]
     # The blocked URL was never fetched.
     assert all(url != blocked for url, _ua in fetch.calls)
+
+
+def test_poll_web_survives_one_bad_url(read_fixture, make_robots, capsys) -> None:
+    bad = "https://example.test/bad"
+    good = "https://example.test/contest"
+
+    def fetch(url: str, user_agent: str) -> str:
+        if url == bad:
+            raise OSError("boom")
+        return read_fixture("contest_page.html")
+
+    config = Config(contest_urls=[bad, good])
+
+    items = list(poll_web(config, fetch=fetch, robots_checker=make_robots()))
+    # The good URL is still yielded even though the first one failed.
+    assert [i.url for i in items] == [good]
+    # A single warning line is printed to stderr.
+    assert bad in capsys.readouterr().err

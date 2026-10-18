@@ -11,6 +11,7 @@ raises.
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Callable, Iterator
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -93,9 +94,17 @@ def poll_social(config: Config, fetch: Fetch = _default_fetch) -> Iterator[Item]
 
     Yields:
         :class:`Item` records from each configured platform. Yields nothing and
-        raises nothing when no tokens are configured.
+        raises nothing when no tokens are configured. A platform whose fetch
+        fails is logged to stderr and skipped so one failing endpoint never
+        aborts the whole poll.
     """
     if config.x_bearer:
-        yield from _fetch_x(fetch, config.x_bearer)
+        try:
+            yield from _fetch_x(fetch, config.x_bearer)
+        except Exception as exc:  # noqa: BLE001 - one bad endpoint must not abort the pass
+            print(f"hotline: skipping X poll: {exc}", file=sys.stderr)
     if config.ig_token:
-        yield from _fetch_ig(fetch, config.ig_token)
+        try:
+            yield from _fetch_ig(fetch, config.ig_token)
+        except Exception as exc:  # noqa: BLE001 - one bad endpoint must not abort the pass
+            print(f"hotline: skipping Instagram poll: {exc}", file=sys.stderr)

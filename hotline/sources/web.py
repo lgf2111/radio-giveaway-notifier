@@ -9,6 +9,7 @@ page with a polite configurable User-Agent, and parses it into an
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable, Iterator
 from html.parser import HTMLParser
 from urllib import robotparser
@@ -146,14 +147,20 @@ def poll_web(
             :func:`robots_allowed`; injectable for tests.
 
     Yields:
-        One :class:`Item` per fetched URL that robots.txt permits.
+        One :class:`Item` per fetched URL that robots.txt permits. A URL that
+        fails to fetch (network error, bad status, timeout) is logged to stderr
+        and skipped so one bad URL never aborts the whole poll.
     """
     urls = list(config.contest_urls)
     if config.feed_url:
         urls.append(config.feed_url)
 
     for url in urls:
-        if not robots_checker(url, config.user_agent):
+        try:
+            if not robots_checker(url, config.user_agent):
+                continue
+            html = fetch(url, config.user_agent)
+        except Exception as exc:  # noqa: BLE001 - one bad URL must not abort the pass
+            print(f"hotline: skipping {url}: {exc}", file=sys.stderr)
             continue
-        html = fetch(url, config.user_agent)
         yield parse_html(html, url)

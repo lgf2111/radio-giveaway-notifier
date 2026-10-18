@@ -16,11 +16,8 @@ jobs:
         with:
           version: "0.12.16"
 
-      - name: Pin Python 3.13
-        run: uv python pin 3.13
-
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --python 3.13 --extra dev
 
       - name: Lint
         run: uv run ruff check .

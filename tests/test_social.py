@@ -74,3 +74,20 @@ def test_both_tokens_yield_from_both(make_social_fetcher) -> None:
     items = list(poll_social(config, fetch=fetch))
     sources = {i.source for i in items}
     assert sources == {"x", "instagram"}
+
+
+def test_one_failing_endpoint_does_not_abort(capsys) -> None:
+    ig_body = json.dumps({"data": [{"id": "2", "caption": "giveaway"}]})
+
+    def fetch(url: str, headers: dict[str, str]) -> str:
+        if "api.twitter.com" in url:
+            raise OSError("x endpoint down")
+        return ig_body
+
+    config = Config(x_bearer="x", ig_token="ig")
+
+    items = list(poll_social(config, fetch=fetch))
+    # X failed but Instagram still yields its item.
+    assert [i.source for i in items] == ["instagram"]
+    # A warning for the failing platform is printed to stderr.
+    assert "X poll" in capsys.readouterr().err
