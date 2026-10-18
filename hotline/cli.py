@@ -182,8 +182,12 @@ def _emit(detection: Detection, item: Item, config: Config, *, dry_run: bool) ->
 
 
 def cmd_once(args: argparse.Namespace, config: Config) -> int:
-    """Handle the ``once`` subcommand: a single polling pass."""
-    store = Store(DEFAULT_DB_PATH)
+    """Handle the ``once`` subcommand: a single polling pass.
+
+    In ``--dry-run`` the dedupe state is kept in an in-memory store so the
+    offline demo is repeatable and never mutates the on-disk database.
+    """
+    store = Store(":memory:" if args.dry_run else DEFAULT_DB_PATH)
     try:
         count = _run_poll(args, config, store)
     finally:
@@ -193,9 +197,13 @@ def cmd_once(args: argparse.Namespace, config: Config) -> int:
 
 
 def cmd_watch(args: argparse.Namespace, config: Config) -> int:
-    """Handle the ``watch`` subcommand: poll forever on an interval."""
+    """Handle the ``watch`` subcommand: poll forever on an interval.
+
+    In ``--dry-run`` the dedupe state is kept in an in-memory store so no
+    on-disk database is written.
+    """
     interval = args.interval
-    store = Store(DEFAULT_DB_PATH)
+    store = Store(":memory:" if args.dry_run else DEFAULT_DB_PATH)
     print(f"Watching every {interval}s (Ctrl-C to stop).")
     try:
         while True:
