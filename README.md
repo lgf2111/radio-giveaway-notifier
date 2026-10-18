@@ -17,9 +17,14 @@ for radio giveaways and pushes a **Telegram** alert within seconds. It catches
 
 > **System dependency:** the audio pipeline shells out to **ffmpeg** to pull
 > and clip the stream. ffmpeg is a *system* package (install it with your OS
-> package manager — `apt install ffmpeg`, `brew install ffmpeg`), **not** a pip
-> dependency. Without ffmpeg on `PATH` the audio source degrades to a no-op and
-> text alerts keep working.
+> package manager — `brew install ffmpeg` on macOS, `apt install ffmpeg` on
+> Debian/Ubuntu), **not** a pip dependency. Without ffmpeg on `PATH` the audio
+> source degrades to a no-op and text alerts keep working.
+
+> **Where it runs:** hotline is cross-platform. The recommended deploy is an
+> always-on **macOS** machine via a launchd LaunchAgent (see
+> [Run 24/7 on macOS](#run-247-on-macos-recommended)); running on an Oracle
+> Cloud Always Free Linux VM is documented as an alternative.
 
 ## Quick start (uv)
 
@@ -198,12 +203,123 @@ The verified state after this revision:
   (the user's reported finding; the test suite itself never touches the
   network).
 
-## Deploy on Oracle Cloud Always Free (24/7, free)
+## Run 24/7 on macOS (recommended)
 
-hotline is light enough to run forever on an **Oracle Cloud Infrastructure
-(OCI) Always Free** Ampere A1 (ARM64) VM — the audio pipeline included. Ready-made
-deploy artifacts live in [`deploy/`](deploy/): a `Dockerfile`, a systemd unit
-(`hotline.service`), and an env template (`hotline.env.example`).
+The simplest way to run hotline forever is on a Mac that is always on — a
+launchd **LaunchAgent** starts `hotline watch` at login and keeps it alive.
+Ready-made assets live in [`deploy/macos/`](deploy/macos/): the LaunchAgent
+plist (`com.hotline.watch.plist`), a wrapper script (`hotline-run.sh`), a
+macOS env template (`hotline.env.example`), and `install.sh` / `uninstall.sh`.
+
+> A **LaunchAgent** (loaded into `gui/$(id -u)`) is used, **not** a root
+> LaunchDaemon, because the watcher needs the logged-in user's network/audio
+> context and Homebrew (`/opt/homebrew`) on `PATH`. A LaunchDaemon runs
+> pre-login with a bare environment and does not fit. For a headless,
+> always-on Mac this means the machine must stay **logged into your user
+> session** (enable automatic login).
+
+### Quick path (install script)
+
+From the cloned repo:
+
+```bash
+brew install ffmpeg          # system dependency for audio (if not already)
+uv sync --extra audio        # install core + the audio extra
+bash deploy/macos/install.sh # idempotent: safe to re-run
+```
+
+`install.sh` checks `brew`/`ffmpeg`/`uv`, creates `~/Library/Logs/hotline` and
+`~/.config/hotline`, seeds `config.toml` + `hotline.env` from the examples
+(only if they do not already exist — it never overwrites your settings),
+substitutes the real repo path/user into the plist, copies it to
+`~/Library/LaunchAgents/com.hotline.watch.plist`, and loads it with
+`launchctl`. Then edit the two seeded files (below) and reload.
+
+### Manual path
+
+```bash
+# 1. System dependency + Python deps.
+brew install ffmpeg
+uv sync --extra audio
+
+# 2. Non-secret config: enable audio, keep the 987FM stream url.
+mkdir -p ~/.config/hotline ~/Library/Logs/hotline
+cp config.example.toml ~/.config/hotline/config.toml
+#   edit ~/.config/hotline/config.toml:
+#     [audio]
+#     enabled = true
+#     stream_url = "https://22903.live.streamtheworld.com/987FM_PREM.aac"
+
+# 3. Secrets: real token + chat id, locked down.
+cp deploy/macos/hotline.env.example ~/.config/hotline/hotline.env
+chmod 600 ~/.config/hotline/hotline.env
+#   edit ~/.config/hotline/hotline.env: set HOTLINE_TELEGRAM_TOKEN + HOTLINE_CHAT_ID
+
+# 4. Install the LaunchAgent. Substitute the two placeholders first:
+#      __INSTALL_DIR__ -> the absolute path to this repo
+#      __USER__        -> your short username ($(id -u -n))
+sed -e "s#__INSTALL_DIR__#$(pwd)#g" -e "s#__USER__#$(id -u -n)#g" \
+    deploy/macos/com.hotline.watch.plist \
+    > ~/Library/LaunchAgents/com.hotline.watch.plist
+
+# 5. Load it (RunAtLoad starts it immediately).
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hotline.watch.plist
+#   Older macOS equivalent: launchctl load -w ~/Library/LaunchAgents/com.hotline.watch.plist
+```
+
+### Verify and operate
+
+```bash
+# Confirm the agent is loaded and see its state/last exit code:
+launchctl print gui/$(id -u)/com.hotline.watch
+
+# Follow the logs (stdout + stderr land under ~/Library/Logs/hotline/):
+tail -f ~/Library/Logs/hotline/hotline.err.log
+
+# After editing config/env, restart the agent to pick up changes:
+launchctl kickstart -k gui/$(id -u)/com.hotline.watch
+
+# Uninstall (stops + removes the agent; keeps config/logs, --purge to delete):
+bash deploy/macos/uninstall.sh
+```
+
+The wrapper (`hotline-run.sh`) sources `~/.config/hotline/hotline.env` so
+secrets never touch the plist, puts Homebrew on `PATH`, then execs
+`uv run --project <repo> python -m hotline watch`. If the env file is missing
+it warns and continues, but text/audio alerts need the Telegram token + chat
+id to be set.
+
+### Keeping the watcher alive (sleep/standby)
+
+You have two choices; pick based on how aggressively your Mac sleeps:
+
+- **(a) Default low-impact path — launchd `KeepAlive` + wake-resume.** The
+  plist sets `KeepAlive = { Crashed = true, SuccessfulExit = false }`, so the
+  watcher restarts if it crashes but stays down on a clean exit or manual
+  unload. `ProcessType = Background` tells macOS this is a long-running service
+  and mitigates **App Nap** throttling. When the Mac sleeps the process pauses
+  and simply resumes on wake — fine if the Mac is awake most of the time (for
+  example, an always-on machine running other agents). No global settings
+  change.
+- **(b) True 24/7 — opt in to staying awake.** If the Mac sleeps on idle and
+  you want the watcher polling through it, pick one:
+  - Uncomment the `caffeinate -i` line in `deploy/macos/hotline-run.sh` so the
+    watcher asserts "no idle sleep" only while it runs (scoped to this process).
+  - System Settings → **Battery / Energy** → enable **"Prevent automatic
+    sleeping when the display is off"** (on desktops / when plugged in).
+  - `pmset` can adjust sleep timers (e.g. `sudo pmset -c sleep 0` on AC).
+
+Do **not** force-disable sleep globally as a default — keep `caffeinate`
+opt-in and prefer the scoped options above so you are not changing
+system-wide power behaviour just to run one watcher.
+
+## Alternative: Oracle Cloud Always Free
+
+If you would rather not keep a Mac on, hotline is also light enough to run
+forever on an **Oracle Cloud Infrastructure (OCI) Always Free** Ampere A1
+(ARM64) VM — the audio pipeline included. Ready-made deploy artifacts live in
+[`deploy/`](deploy/): a `Dockerfile`, a systemd unit (`hotline.service`), and
+an env template (`hotline.env.example`).
 
 ### 1. Create an Always-Free Ampere A1 (ARM64) VM
 

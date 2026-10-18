@@ -1,4 +1,4 @@
-.PHONY: install install-audio test lint fmt run lock clean
+.PHONY: install install-audio test lint fmt run lock clean mac-install mac-uninstall
 
 # Create the venv and install core + dev dependencies (no audio/torch).
 install:
@@ -25,6 +25,14 @@ fmt:
 # Offline demo: print detections from the bundled fixtures.
 run:
 	uv run python -m hotline once --dry-run
+
+# Install the macOS launchd LaunchAgent (idempotent; see deploy/macos/).
+mac-install:
+	bash deploy/macos/install.sh
+
+# Stop and remove the macOS LaunchAgent (keeps config/logs).
+mac-uninstall:
+	bash deploy/macos/uninstall.sh
 
 # Regenerate the lockfile after changing dependencies.
 lock:

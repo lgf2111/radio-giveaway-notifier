@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd LaunchAgent for hotline -- 987FM giveaway notifier (watch mode).
+
+  This is a USER LaunchAgent (loaded into gui/$(id -u)), NOT a root
+  LaunchDaemon. The watcher needs the logged-in user's network/audio context
+  and Homebrew on PATH (/opt/homebrew on Apple Silicon); a root LaunchDaemon
+  runs pre-login with a bare environment and does not fit. The Mac therefore
+  has to stay logged into the user session for a headless, always-on setup.
+
+  Placeholder tokens are substituted by deploy/macos/install.sh (or by hand for
+  a manual install):
+
+    __INSTALL_DIR__  absolute path to the cloned repo (WorkingDirectory +
+                     location of deploy/macos/hotline-run.sh)
+    __USER__         short user name ($(id -u -n)); used in the log paths
+
+  NO secrets live in this file. The wrapper script (hotline-run.sh) sources the
+  env file (~/.config/hotline/hotline.env) at launch so HOTLINE_* never touch
+  the plist.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hotline.watch</string>
+
+    <!-- Invoke the wrapper, not uv directly: it sources the env file, fixes up
+         PATH, and then execs `uv run ... python -m hotline watch`. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__INSTALL_DIR__/deploy/macos/hotline-run.sh</string>
+    </array>
+
+    <!-- Start as soon as the agent is loaded (and at login). -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart on a crash, but a clean exit (or a manual `launchctl bootout`)
+         stays down -- so uninstall/stop is respected. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Background service: lets the OS schedule it as a long-running daemon
+         and mitigates App Nap throttling. -->
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>WorkingDirectory</key>
+    <string>__INSTALL_DIR__</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/__USER__/Library/Logs/hotline/hotline.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/__USER__/Library/Logs/hotline/hotline.err.log</string>
+
+    <!-- Ensure Homebrew + system paths are visible to launchd's bare env so uv
+         and ffmpeg resolve. Secrets are NOT set here. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
