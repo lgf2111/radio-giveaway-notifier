@@ -41,6 +41,15 @@ fi
 # buffering (critical for monitoring a long-running background service).
 export PYTHONUNBUFFERED=1
 
+# Isolate the service's environment from the dev `.venv`. `uv run` syncs the
+# project environment to match the requested extras on every invocation, so the
+# service (--extra audio) and a dev shell (--extra dev) sharing one `.venv`
+# would repeatedly tear out each other's extra-only packages -- causing the
+# intermittent "can't find pytest" when running tests while the service is up.
+# Pointing the service at its own venv keeps the two from fighting: the service
+# owns this one (always has faster-whisper) and dev keeps the repo `.venv`.
+export UV_PROJECT_ENVIRONMENT="${HOME}/.config/hotline/service-venv"
+
 # Run Whisper fully offline. The faster-whisper model is downloaded once (on the
 # first run, or ahead of time) into the HF hub cache; after that, HF_HUB_OFFLINE
 # stops faster-whisper from issuing a model-revision check to huggingface.co on
