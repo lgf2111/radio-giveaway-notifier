@@ -54,13 +54,17 @@ export HF_HUB_OFFLINE=1
 # without it the audio source degrades to a no-op (text/web alerts only).
 # -v emits INFO logs (poll cycles, gate decisions) to the err log so you can
 # confirm it's alive; drop it for a quieter log.
-exec uv run --project "${INSTALL_DIR}" --extra audio python -m hotline -v watch \
+# TRUE 24/7: caffeinate -i prevents IDLE sleep while the watcher runs. Scoped to
+# this process only (not a global sleep disable). NOTE: lid-close sleep is NOT
+# prevented by caffeinate alone -- for lid-closed (clamshell) operation the Mac
+# must be on EXTERNAL POWER, and `sudo pmset -c disablesleep 1` must be set so
+# closing the lid on AC doesn't sleep. On battery the Mac will still sleep on
+# lid-close regardless. See the README "Keeping the watcher alive" section.
+exec caffeinate -i uv run --project "${INSTALL_DIR}" --extra audio python -m hotline -v watch \
     --config "${CONFIG_PATH}" \
     --db "${DB_PATH}"
 
-# Opt-in TRUE 24/7: prevent idle sleep while the watcher runs by wrapping the
-# command in caffeinate. Comment out the exec above and uncomment the line
-# below. Do NOT also disable sleep globally -- caffeinate -i is scoped to this
-# process only. See the README "Keeping the watcher alive" section.
-# exec caffeinate -i uv run --project "${INSTALL_DIR}" --extra audio \
-#     python -m hotline watch --config "${CONFIG_PATH}" --db "${DB_PATH}"
+# Previous (idle-sleep-permitting) exec, kept for reference:
+# exec uv run --project "${INSTALL_DIR}" --extra audio python -m hotline -v watch \
+#     --config "${CONFIG_PATH}" \
+#     --db "${DB_PATH}"
